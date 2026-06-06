@@ -15,6 +15,7 @@ struct BridgeEvent: Sendable {
         case chatRaw
         case muteProbe
         case messageObserved
+        case readMark
         case unknown
     }
 
@@ -42,6 +43,7 @@ enum MessageMonitorParser {
         case "chat_raw": .chatRaw
         case "message_observed": .messageObserved
         case "mute_probe": .muteProbe
+        case "read_mark": .readMark
         default: .unknown
         }
         return BridgeEvent(type: type, payload: payload)
@@ -95,6 +97,20 @@ enum MessageMonitorParser {
         }
 
         return false
+    }
+
+    static func int64(from value: Any?) -> Int64? {
+        switch value {
+        case let n as Int64: n
+        case let n as Int: Int64(n)
+        case let n as Double: Int64(n)
+        case let n as NSNumber: n.int64Value
+        case let s as String:
+            if let parsed = Int64(s) { parsed }
+            else if let parsed = Double(s) { Int64(parsed) }
+            else { nil }
+        default: nil
+        }
     }
 
     static func string(from value: Any?) -> String? {

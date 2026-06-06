@@ -26,6 +26,11 @@ final class AccountRuntime: MaxWebSessionDelegate {
     private var wsClosedAt: Date?
     private var isMonitoringActive = false
     private(set) var monitoringPauseReason: String?
+    private var chatReadMarks: [String: Int64] = [:]
+    private var pendingForwardMessageIds: Set<String> = []
+    private var pendingForwardTasks: [String: Task<Void, Never>] = [:]
+
+    private static let smartForwardDelayNs: UInt64 = 1_500_000_000
 
     var status: AccountStatus = .offline
     var onStatusChange: ((AccountStatus) -> Void)?
@@ -103,6 +108,7 @@ final class AccountRuntime: MaxWebSessionDelegate {
 
     private func tearDownMonitoring() {
         isMonitoringActive = false
+        cancelPendingForwardTasks()
         reconnectTask?.cancel()
         reconnectTask = nil
         syncWatchdogTask?.cancel()
@@ -111,6 +117,14 @@ final class AccountRuntime: MaxWebSessionDelegate {
         keepAliveTask = nil
         HiddenWebViewHost.detach(accountId: accountId)
         session.webView.stopLoading()
+    }
+
+    private func cancelPendingForwardTasks() {
+        for task in pendingForwardTasks.values {
+            task.cancel()
+        }
+        pendingForwardTasks.removeAll()
+        pendingForwardMessageIds.removeAll()
     }
 
     func updateAccount(_ account: Account) {
@@ -184,6 +198,8 @@ final class AccountRuntime: MaxWebSessionDelegate {
             LogService.shared.logMuteProbe(accountId: accountId, payload: event.payload)
         case .messageObserved:
             handleMessageObserved(event.payload)
+        case .readMark:
+            handleReadMark(event.payload)
         case .domActivity, .unknown:
             break
         }
@@ -307,28 +323,6 @@ final class AccountRuntime: MaxWebSessionDelegate {
             }
         }
 
-        let globalKey = GlobalForwardDedup.makeKey(
-            maxUserId: payloadMyUserId ?? myUserId,
-            accountId: accountId,
-            message: message
-        )
-        guard globalForwardDedup.tryClaim(key: globalKey) else {
-            recordFiltered()
-            tracePipeline("skip_global_duplicate", message)
-            LogService.shared.log(
-                .messageDetected,
-                accountId: accountId,
-                message: "Skipped duplicate MAX message id=\(message.id) key=\(globalKey) (already forwarded by another account)"
-            )
-            return
-        }
-
-        guard dedupStore.markProcessed(accountId: accountId, message: message) else {
-            tracePipeline("skip_duplicate", message)
-            LogService.shared.log(.messageDetected, accountId: accountId, message: "Skipped duplicate id=\(message.id)")
-            return
-        }
-
         var stats = statsUpdater()
         stats.recordReceived()
         statsRecorder(stats)
@@ -342,8 +336,123 @@ final class AccountRuntime: MaxWebSessionDelegate {
             message: "chat=\(message.chatId) id=\(message.id) from=\(message.senderName)"
         )
 
+        if account.smartForwardEnabled {
+            scheduleSmartForward(
+                message: message,
+                displayText: displayText,
+                payload: payload,
+                payloadMyUserId: payloadMyUserId
+            )
+        } else {
+            guard claimAndForward(message: message, displayText: displayText, payloadMyUserId: payloadMyUserId) else {
+                return
+            }
+        }
+    }
+
+    private func scheduleSmartForward(
+        message: MaxMessage,
+        displayText: String,
+        payload: [String: Any],
+        payloadMyUserId: String?
+    ) {
+        guard !pendingForwardMessageIds.contains(message.id) else {
+            tracePipeline("skip_pending", message)
+            return
+        }
+
+        let arrivalChatMark = MessageMonitorParser.int64(from: payload["chatMark"])
+        let messageTime = MessageMonitorParser.int64(from: payload["messageTime"]) ?? message.timestamp
+
+        pendingForwardMessageIds.insert(message.id)
+        let messageId = message.id
+        let task = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.smartForwardDelayNs)
+            guard !Task.isCancelled, let self else { return }
+            self.pendingForwardMessageIds.remove(messageId)
+            self.pendingForwardTasks.removeValue(forKey: messageId)
+
+            if self.isMessageRead(
+                chatId: message.chatId,
+                messageTime: messageTime,
+                arrivalChatMark: arrivalChatMark
+            ) {
+                self.recordFiltered()
+                self.tracePipeline("skip_read", message)
+                LogService.shared.log(
+                    .messageDetected,
+                    accountId: self.accountId,
+                    message: "Skipped read message id=\(message.id) chat=\(message.chatId) time=\(messageTime)"
+                )
+                return
+            }
+
+            _ = self.claimAndForward(
+                message: message,
+                displayText: displayText,
+                payloadMyUserId: payloadMyUserId
+            )
+        }
+        pendingForwardTasks[messageId] = task
+    }
+
+    @discardableResult
+    private func claimAndForward(
+        message: MaxMessage,
+        displayText: String,
+        payloadMyUserId: String?
+    ) -> Bool {
+        let globalKey = GlobalForwardDedup.makeKey(
+            maxUserId: payloadMyUserId ?? myUserId,
+            accountId: accountId,
+            message: message
+        )
+        guard globalForwardDedup.tryClaim(key: globalKey) else {
+            recordFiltered()
+            tracePipeline("skip_global_duplicate", message)
+            LogService.shared.log(
+                .messageDetected,
+                accountId: accountId,
+                message: "Skipped duplicate MAX message id=\(message.id) key=\(globalKey) (already forwarded by another account)"
+            )
+            return false
+        }
+
+        guard dedupStore.markProcessed(accountId: accountId, message: message) else {
+            tracePipeline("skip_duplicate", message)
+            LogService.shared.log(.messageDetected, accountId: accountId, message: "Skipped duplicate id=\(message.id)")
+            return false
+        }
+
         Task {
             await forwardMessage(message, displayText: displayText)
+        }
+        return true
+    }
+
+    private func isMessageRead(chatId: String, messageTime: Int64, arrivalChatMark: Int64?) -> Bool {
+        guard messageTime > 0 else { return false }
+        if let arrivalChatMark, arrivalChatMark >= messageTime {
+            return true
+        }
+        if let cachedMark = chatReadMarks[chatId], cachedMark >= messageTime {
+            return true
+        }
+        return false
+    }
+
+    private func handleReadMark(_ payload: [String: Any]) {
+        guard MessageMonitorParser.boolValue(payload["setAsUnread"]) == false else { return }
+        guard let chatId = MessageMonitorParser.string(from: payload["chatId"]),
+              let mark = MessageMonitorParser.int64(from: payload["mark"]) else { return }
+
+        let eventUserId = MessageMonitorParser.string(from: payload["userId"])
+        let payloadMyUserId = MessageMonitorParser.string(from: payload["myUserId"]) ?? myUserId
+        guard let payloadMyUserId, let eventUserId, eventUserId == payloadMyUserId else { return }
+
+        let previous = chatReadMarks[chatId] ?? 0
+        if mark > previous {
+            chatReadMarks[chatId] = mark
         }
     }
 

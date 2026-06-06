@@ -13,6 +13,7 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
     var verboseChatLogging: Bool
     var traceRealtimeLogging: Bool
     var muteProbeLogging: Bool
+    var smartForwardEnabled: Bool
 
     init(
         id: UUID,
@@ -26,7 +27,8 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
         forwardAttachmentsPlaceholder: Bool,
         verboseChatLogging: Bool = false,
         traceRealtimeLogging: Bool = true,
-        muteProbeLogging: Bool = false
+        muteProbeLogging: Bool = false,
+        smartForwardEnabled: Bool = true
     ) {
         self.id = id
         self.name = name
@@ -40,6 +42,7 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
         self.verboseChatLogging = verboseChatLogging
         self.traceRealtimeLogging = traceRealtimeLogging
         self.muteProbeLogging = muteProbeLogging
+        self.smartForwardEnabled = smartForwardEnabled
     }
 
     static func makeDefault() -> Account {
@@ -70,6 +73,7 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
         verboseChatLogging = try container.decodeIfPresent(Bool.self, forKey: .verboseChatLogging) ?? false
         traceRealtimeLogging = try container.decodeIfPresent(Bool.self, forKey: .traceRealtimeLogging) ?? true
         muteProbeLogging = try container.decodeIfPresent(Bool.self, forKey: .muteProbeLogging) ?? false
+        smartForwardEnabled = try container.decodeIfPresent(Bool.self, forKey: .smartForwardEnabled) ?? true
     }
 
     var effectiveRecipient: String {
@@ -79,6 +83,6 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, name, iMessageRecipient, contactIdentifier, enabled
         case skipGroupChats, skipOwnMessages, skipMutedChats, forwardAttachmentsPlaceholder
-        case verboseChatLogging, traceRealtimeLogging, muteProbeLogging
+        case verboseChatLogging, traceRealtimeLogging, muteProbeLogging, smartForwardEnabled
     }
 }

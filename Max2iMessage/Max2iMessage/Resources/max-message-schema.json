@@ -4,6 +4,7 @@
   "authLocalStorageKey": "__oneme_auth",
   "deviceIdLocalStorageKey": "__oneme_device_id",
   "incomingMessageOpcode": 128,
+  "readMarkOpcode": 130,
   "chatUpdateOpcode": 135,
   "authSnapshotOpcode": 19,
   "messageFields": {
@@ -12,7 +13,15 @@
     "senderId": "payload.message.sender",
     "text": "payload.message.text",
     "timestamp": "payload.message.time",
-    "attaches": "payload.message.attaches"
+    "attaches": "payload.message.attaches",
+    "unread": "payload.unread",
+    "chatMark": "payload.mark"
+  },
+  "readMarkFields": {
+    "chatId": "payload.chatId",
+    "userId": "payload.userId",
+    "mark": "payload.mark",
+    "setAsUnread": "payload.setAsUnread"
   },
   "profileFields": {
     "userId": "payload.profile.id",

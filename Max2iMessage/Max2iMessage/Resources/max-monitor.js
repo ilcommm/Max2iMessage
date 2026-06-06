@@ -6,6 +6,7 @@
     window.__max2iMessageInstallError = null;
 
     const OPCODE_NOTIF_MESSAGE = 128;
+    const OPCODE_NOTIF_MARK = 130;
     const OPCODE_NOTIF_CHAT = 135;
     const OPCODE_NOTIF_CONTACT = 131;
     const OPCODE_AUTH_SNAPSHOT = 19;
@@ -15,6 +16,7 @@
     const chatTypes = {};
     const chatTitles = {};
     const chatMuteUntil = {};
+    const chatReadMark = {};
     let sessionReady = false;
     let everSynced = false;
     let myUserId = null;
@@ -626,6 +628,30 @@
         return isChatMuted(chatMuteUntil[chatId]);
     }
 
+    function parseNumericField(value) {
+        if (value === null || value === undefined || value === '') return null;
+        const num = Number(value);
+        return Number.isFinite(num) ? num : null;
+    }
+
+    function updateChatReadMark(chatId, mark, source) {
+        if (!chatId || mark === null || mark === undefined) return;
+        const value = Number(mark);
+        if (!Number.isFinite(value)) return;
+        const previous = chatReadMark[chatId];
+        if (previous === undefined || value > previous) {
+            chatReadMark[chatId] = value;
+            if (isVerboseLogging()) {
+                postChatRaw({
+                    source: source || 'read_mark_cache',
+                    chatId: safeString(chatId),
+                    previous: previous,
+                    mark: value
+                });
+            }
+        }
+    }
+
     function ingestSettingsDeep(obj, source, depth) {
         ingestMuteFromUnknownStructure(obj, source, depth);
     }
@@ -936,6 +962,27 @@
             return;
         }
 
+        if (opcode === OPCODE_NOTIF_MARK) {
+            const chatId = safeString(payload.chatId);
+            const userId = safeString(payload.userId);
+            const mark = parseNumericField(payload.mark);
+            const setAsUnread = payload.setAsUnread === true;
+            const uid = currentMyUserId();
+
+            if (chatId && mark !== null && uid && userId === uid && !setAsUnread) {
+                updateChatReadMark(chatId, mark, 'notif_mark');
+            }
+
+            post('read_mark', {
+                chatId: chatId,
+                userId: userId,
+                mark: mark,
+                setAsUnread: setAsUnread,
+                myUserId: uid || ''
+            });
+            return;
+        }
+
         if (opcode === OPCODE_NOTIF_MESSAGE) {
             touchMessage();
 
@@ -974,6 +1021,10 @@
                 sessionReady: sessionReady
             });
 
+            const messageTime = parseNumericField(parsed.msg.time || parsed.msg.timestamp);
+            const chatMark = parseNumericField(payload.mark);
+            const unread = parseNumericField(payload.unread);
+
             post('new_message', {
                 chatId: parsed.chatId,
                 messageId: parsed.messageId,
@@ -982,6 +1033,9 @@
                 chatTitle: chatTitles[parsed.chatId] || '',
                 text: parsed.text,
                 timestamp: safeString(parsed.msg.time || parsed.msg.timestamp),
+                messageTime: messageTime,
+                chatMark: chatMark,
+                unread: unread,
                 chatType: parsed.chatType,
                 isMutedChat: isChatIdMuted(parsed.chatId),
                 chatTypeKnown: isChatTypeKnown(parsed.chatId) || !!parsed.chatType,

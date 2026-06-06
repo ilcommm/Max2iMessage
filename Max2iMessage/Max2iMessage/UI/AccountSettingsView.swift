@@ -112,6 +112,11 @@ struct AccountSettingsView: View {
             }
 
             Section("Фильтры") {
+                Toggle("Умная пересылка", isOn: $draftAccount.smartForwardEnabled)
+                    .onChange(of: draftAccount.smartForwardEnabled) { persistAccount() }
+                Text("Ждёт 1.5 с и не пересылает сообщения, которые вы уже просмотрели в MAX (на любом устройстве).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Toggle("Не пересылать свои сообщения", isOn: $draftAccount.skipOwnMessages)
                     .onChange(of: draftAccount.skipOwnMessages) { persistAccount() }
                 Toggle("Не пересылать из групповых чатов", isOn: $draftAccount.skipGroupChats)
