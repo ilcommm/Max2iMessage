@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "webUrl": "https://web.max.ru",
+  "authLocalStorageKey": "__oneme_auth",
+  "deviceIdLocalStorageKey": "__oneme_device_id",
+  "incomingMessageOpcode": 128,
+  "chatUpdateOpcode": 135,
+  "authSnapshotOpcode": 19,
+  "messageFields": {
+    "chatId": "payload.chatId",
+    "messageId": "payload.message.id",
+    "senderId": "payload.message.sender",
+    "text": "payload.message.text",
+    "timestamp": "payload.message.time",
+    "attaches": "payload.message.attaches"
+  },
+  "profileFields": {
+    "userId": "payload.profile.id",
+    "userName": "payload.profile.name"
+  },
+  "chatTypeFields": {
+    "chatId": "payload.chat.id",
+    "chatType": "payload.chat.type"
+  },
+  "muteFields": {
+    "dontDisturbUntil": "chat.dontDisturbUntil",
+    "mutedValues": {
+      "permanent": -1,
+      "unmuted": 0
+    }
+  },
+  "groupChatTypes": ["GROUP", "CHANNEL", "CHAT"]
+}
