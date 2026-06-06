@@ -56,7 +56,7 @@ enum MessageMonitorParser {
         let text = stringValue(payload["text"]) ?? ""
         let timestamp = Int64(stringValue(payload["timestamp"]) ?? "0") ?? 0
         let chatType = stringValue(payload["chatType"]) ?? ""
-        let hasAttachment = payload["hasAttachment"] as? Bool ?? false
+        let hasAttachment = boolValue(payload["hasAttachment"])
         let isGroup = groupTypes.contains(chatType.uppercased())
         let isMuted = payload["isMutedChat"] as? Bool ?? false
         let chatTypeKnown = payload["chatTypeKnown"] as? Bool ?? false
@@ -80,8 +80,34 @@ enum MessageMonitorParser {
     }
 
     static func isOwnMessage(payload: [String: Any], myUserId: String?) -> Bool {
-        guard let myUserId, let senderId = stringValue(payload["senderId"]) else { return false }
-        return senderId == myUserId
+        if boolValue(payload["isOwnMessage"]) { return true }
+
+        let senderId = stringValue(payload["senderId"])
+        let senderName = stringValue(payload["senderName"]) ?? ""
+
+        if let myUserId, let senderId, senderId == myUserId {
+            return true
+        }
+
+        // MAX often omits sender on echoed own messages in dialogs.
+        if senderName.isEmpty && senderId == nil {
+            return true
+        }
+
+        return false
+    }
+
+    static func string(from value: Any?) -> String? {
+        stringValue(value)
+    }
+
+    static func boolValue(_ value: Any?) -> Bool {
+        switch value {
+        case let b as Bool: b
+        case let n as NSNumber: n.boolValue
+        case let s as String: ["1", "true", "yes"].contains(s.lowercased())
+        default: false
+        }
     }
 
     private static func stringValue(_ value: Any?) -> String? {

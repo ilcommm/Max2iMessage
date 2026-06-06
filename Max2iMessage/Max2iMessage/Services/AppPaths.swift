@@ -21,6 +21,10 @@ enum AppPaths {
             .appendingPathComponent("\(accountId.uuidString).json")
     }
 
+    static var globalForwardDedupFile: URL {
+        appSupport.appendingPathComponent("global-forward-dedup.json")
+    }
+
     static func dailyStatsFile(date: Date = .now) -> URL {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"

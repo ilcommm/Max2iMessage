@@ -7,6 +7,7 @@ final class AccountRuntime: MaxWebSessionDelegate {
     private var account: Account
     private let session: MaxWebSession
     private let dedupStore: DedupStore
+    private let globalForwardDedup: GlobalForwardDedup
     private let reconnectPolicy = ReconnectPolicy()
     private let forwarder = MessageForwarder()
     private var reconnectTask: Task<Void, Never>?
@@ -23,10 +24,13 @@ final class AccountRuntime: MaxWebSessionDelegate {
     private var monitorMissingRetries = 0
     private var lastHeartbeatMessageAt = 0
     private var wsClosedAt: Date?
+    private var isMonitoringActive = false
+    private(set) var monitoringPauseReason: String?
 
     var status: AccountStatus = .offline
     var onStatusChange: ((AccountStatus) -> Void)?
     var onStatsChange: (() -> Void)?
+    var onMaxUserIdChange: ((String) -> Void)?
 
     private let statsUpdater: () -> DailyStats
     private let statsRecorder: (DailyStats) -> Void
@@ -40,6 +44,7 @@ final class AccountRuntime: MaxWebSessionDelegate {
         self.account = account
         self.session = MaxWebSession(accountId: account.id)
         self.dedupStore = DedupStore(accountId: account.id)
+        self.globalForwardDedup = .shared
         self.statsUpdater = statsUpdater
         self.statsRecorder = statsRecorder
         self.session.delegate = self
@@ -52,6 +57,12 @@ final class AccountRuntime: MaxWebSessionDelegate {
             updateStatus(.offline)
             return
         }
+        guard monitoringPauseReason == nil else {
+            updateStatus(.offline)
+            return
+        }
+        guard !isMonitoringActive else { return }
+        isMonitoringActive = true
         isSessionSynced = false
         historyCutoffMs = 0
         lastNavigationFinishedAt = .distantPast
@@ -65,6 +76,33 @@ final class AccountRuntime: MaxWebSessionDelegate {
     }
 
     func stop() {
+        tearDownMonitoring()
+        monitoringPauseReason = nil
+        updateStatus(.offline)
+    }
+
+    func suspendMonitoring(reason: String) {
+        if monitoringPauseReason == reason, !isMonitoringActive {
+            return
+        }
+        monitoringPauseReason = reason
+        tearDownMonitoring()
+        updateStatus(.offline)
+        LogService.shared.log(.reconnect, accountId: accountId, message: "Monitoring suspended: \(reason)")
+    }
+
+    func resumeMonitoring() {
+        monitoringPauseReason = nil
+        guard account.enabled else {
+            updateStatus(.offline)
+            return
+        }
+        guard !isMonitoringActive else { return }
+        start()
+    }
+
+    private func tearDownMonitoring() {
+        isMonitoringActive = false
         reconnectTask?.cancel()
         reconnectTask = nil
         syncWatchdogTask?.cancel()
@@ -72,21 +110,20 @@ final class AccountRuntime: MaxWebSessionDelegate {
         keepAliveTask?.cancel()
         keepAliveTask = nil
         HiddenWebViewHost.detach(accountId: accountId)
-        updateStatus(.offline)
+        session.webView.stopLoading()
     }
 
     func updateAccount(_ account: Account) {
         let wasEnabled = self.account.enabled
         self.account = account
         syncMonitorOptions()
-        if account.enabled && !wasEnabled {
-            start()
-        } else if !account.enabled {
+        if !account.enabled {
             stop()
         }
     }
 
     func reload() {
+        guard monitoringPauseReason == nil else { return }
         isSessionSynced = false
         historyCutoffMs = 0
         lastObservedPacketCount = 0
@@ -109,18 +146,19 @@ final class AccountRuntime: MaxWebSessionDelegate {
         case .wsOpen:
             handleWebSocketOpen(event.payload)
         case .authCheck:
-            if let userId = event.payload["userId"] as? String, !userId.isEmpty {
-                myUserId = userId
+            if let userId = MessageMonitorParser.string(from: event.payload["userId"]) {
+                noteMaxUserId(userId)
             }
-            let hasToken = event.payload["hasToken"] as? Bool ?? false
+            let hasToken = MessageMonitorParser.boolValue(event.payload["hasToken"])
             if !hasToken {
                 updateStatus(.needsAuth)
                 LogService.shared.log(.authLost, accountId: accountId, message: "Session token missing")
             }
         case .authReady:
-            if let userId = event.payload["userId"] as? String, !userId.isEmpty {
-                myUserId = userId
+            if let userId = MessageMonitorParser.string(from: event.payload["userId"]) {
+                noteMaxUserId(userId)
             }
+            refreshMyUserIdFromSession()
             reconnectPolicy.reset()
             markSessionSynced(log: "Authenticated")
             syncWatchdogTask?.cancel()
@@ -128,6 +166,7 @@ final class AccountRuntime: MaxWebSessionDelegate {
             monitorMissingRetries = 0
             updateStatus(.online)
         case .chatsSynced:
+            refreshMyUserIdFromSession()
             markSessionSynced(log: "Chats synced, count=\(event.payload["chatCount"] as? Int ?? 0)")
             syncWatchdogTask?.cancel()
             syncWatchdogTask = nil
@@ -153,6 +192,7 @@ final class AccountRuntime: MaxWebSessionDelegate {
     func webSessionDidFinishNavigation(_ session: MaxWebSession) {
         lastNavigationFinishedAt = Date()
         syncMonitorOptions()
+        refreshMyUserIdFromSession()
         Task {
             let probe = await session.probeMonitor()
             if probe.installed {
@@ -219,12 +259,19 @@ final class AccountRuntime: MaxWebSessionDelegate {
             return
         }
 
-        let payloadMyUserId = (payload["myUserId"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? myUserId
+        let payloadMyUserId = MessageMonitorParser.string(from: payload["myUserId"]) ?? myUserId
+        if let payloadMyUserId {
+            noteMaxUserId(payloadMyUserId)
+        }
 
         if account.skipOwnMessages && MessageMonitorParser.isOwnMessage(payload: payload, myUserId: payloadMyUserId) {
             recordFiltered()
             tracePipeline("skip_own", message)
-            LogService.shared.log(.messageDetected, accountId: accountId, message: "Skipped own message id=\(message.id)")
+            LogService.shared.log(
+                .messageDetected,
+                accountId: accountId,
+                message: "Skipped own message id=\(message.id) senderId=\(message.senderId) myUserId=\(payloadMyUserId ?? "-")"
+            )
             return
         }
         if account.skipGroupChats {
@@ -260,6 +307,22 @@ final class AccountRuntime: MaxWebSessionDelegate {
             }
         }
 
+        let globalKey = GlobalForwardDedup.makeKey(
+            maxUserId: payloadMyUserId ?? myUserId,
+            accountId: accountId,
+            message: message
+        )
+        guard globalForwardDedup.tryClaim(key: globalKey) else {
+            recordFiltered()
+            tracePipeline("skip_global_duplicate", message)
+            LogService.shared.log(
+                .messageDetected,
+                accountId: accountId,
+                message: "Skipped duplicate MAX message id=\(message.id) key=\(globalKey) (already forwarded by another account)"
+            )
+            return
+        }
+
         guard dedupStore.markProcessed(accountId: accountId, message: message) else {
             tracePipeline("skip_duplicate", message)
             LogService.shared.log(.messageDetected, accountId: accountId, message: "Skipped duplicate id=\(message.id)")
@@ -285,6 +348,11 @@ final class AccountRuntime: MaxWebSessionDelegate {
     }
 
     private func forwardMessage(_ message: MaxMessage, displayText: String) async {
+        let globalKey = GlobalForwardDedup.makeKey(
+            maxUserId: myUserId,
+            accountId: accountId,
+            message: message
+        )
         let recipient = account.effectiveRecipient
         guard !recipient.isEmpty else {
             var updated = statsUpdater()
@@ -306,7 +374,11 @@ final class AccountRuntime: MaxWebSessionDelegate {
             updated.recordSent()
             statsRecorder(updated)
             onStatsChange?()
-            LogService.shared.log(.messageSent, accountId: accountId, message: "to=\(recipient) id=\(message.id)")
+            LogService.shared.log(
+                .messageSent,
+                accountId: accountId,
+                message: "to=\(recipient) id=\(message.id) key=\(globalKey) maxUserId=\(myUserId ?? "-")"
+            )
         } catch {
             var updated = statsUpdater()
             updated.recordError()
@@ -634,5 +706,20 @@ final class AccountRuntime: MaxWebSessionDelegate {
         guard status != newStatus else { return }
         status = newStatus
         onStatusChange?(newStatus)
+    }
+
+    private func noteMaxUserId(_ userId: String) {
+        guard myUserId != userId else { return }
+        myUserId = userId
+        LogService.shared.log(.authSuccess, accountId: accountId, message: "Runtime MAX userId=\(userId)")
+        onMaxUserIdChange?(userId)
+    }
+
+    private func refreshMyUserIdFromSession() {
+        Task {
+            if let userId = await session.fetchAuthUserId() {
+                noteMaxUserId(userId)
+            }
+        }
     }
 }

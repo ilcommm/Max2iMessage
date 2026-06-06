@@ -86,6 +86,27 @@ final class MaxWebSession: NSObject {
         LogService.shared.log(.reconnect, accountId: accountId, message: "Monitoring WebView rebuilt")
     }
 
+    func fetchAuthUserId() async -> String? {
+        let script = """
+        (function() {
+            try {
+                const authRaw = localStorage.getItem('__oneme_auth');
+                if (!authRaw) return null;
+                const auth = JSON.parse(authRaw);
+                const id = (auth.profile && (auth.profile.id || auth.profile.userId))
+                    || auth.userId || auth.id || (auth.user && auth.user.id)
+                    || auth.viewerId || auth.accountId;
+                return id != null && id !== '' ? String(id) : null;
+            } catch (e) {
+                return null;
+            }
+        })()
+        """
+        guard let value = try? await webView.evaluateJavaScript(script) else { return nil }
+        if value is NSNull { return nil }
+        return MessageMonitorParser.string(from: value)
+    }
+
     func checkAuthentication() async -> Bool {
         let script = "localStorage.getItem('__oneme_auth') != null"
         do {

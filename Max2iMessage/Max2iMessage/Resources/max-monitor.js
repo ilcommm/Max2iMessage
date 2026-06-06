@@ -442,10 +442,32 @@
             const authRaw = localStorage.getItem('__oneme_auth');
             if (!authRaw) return null;
             const auth = JSON.parse(authRaw);
-            return safeString(auth.profile?.id || auth.userId || auth.id);
+            return safeString(
+                (auth.profile && (auth.profile.id || auth.profile.userId)) ||
+                auth.userId ||
+                auth.id ||
+                (auth.user && auth.user.id) ||
+                auth.viewerId ||
+                auth.accountId
+            ) || null;
         } catch (_) {
             return null;
         }
+    }
+
+    function currentMyUserId() {
+        return myUserId || readMyUserIdFromStorage();
+    }
+
+    function isOwnOutgoingMessage(parsed, senderName) {
+        const uid = currentMyUserId();
+        const msg = parsed.msg || {};
+        if (msg.outgoing === true || msg.out === true || msg.isOutgoing === true) return true;
+        if (msg.direction === 'out' || msg.direction === 'outgoing') return true;
+        if (uid && parsed.senderId && parsed.senderId === uid) return true;
+        // MAX echoes own messages without sender name/id in dialogs.
+        if (!senderName && !parsed.senderId) return true;
+        return false;
     }
 
     function extractContactName(entity) {
@@ -871,7 +893,7 @@
             sessionReady = true;
             everSynced = true;
             publishState();
-            post('auth_ready', { userId: myUserId, userName: profile.name || '' });
+            post('auth_ready', { userId: currentMyUserId() || '', userName: profile.name || '' });
             post('chats_synced', {
                 chatCount: Array.isArray(payload.chats) ? payload.chats.length : 0
             });
@@ -943,6 +965,8 @@
 
             const senderName = resolveSenderName(parsed, payload);
             if (parsed.senderId && senderName) userNames[parsed.senderId] = senderName;
+            myUserId = currentMyUserId();
+            const ownMessage = isOwnOutgoingMessage(parsed, senderName);
 
             post('message_observed', {
                 chatId: parsed.chatId,
@@ -963,7 +987,8 @@
                 chatTypeKnown: isChatTypeKnown(parsed.chatId) || !!parsed.chatType,
                 chatMuteKnown: isChatMuteKnown(parsed.chatId),
                 hasAttachment: Array.isArray(parsed.attaches) && parsed.attaches.length > 0,
-                myUserId: myUserId || readMyUserIdFromStorage()
+                myUserId: myUserId || '',
+                isOwnMessage: ownMessage
             });
         }
     }

@@ -26,7 +26,7 @@
 
 ## Установка (без Xcode)
 
-1. Скачайте **Max2iMessage-v1.0-macos.zip** из [Releases](https://github.com/ilcommm/Max2iMessage/releases/latest)
+1. Скачайте **Max2iMessage-v1.1-macos.zip** из [Releases](https://github.com/ilcommm/Max2iMessage/releases/latest)
 2. Распакуйте архив и перетащите **Max2iMessage.app** в папку «Программы»
 3. При первом запуске macOS может заблокировать приложение — откройте **Системные настройки → Конфиденциальность и безопасность** и нажмите **Всё равно открыть**, либо щёлкните по `.app` правой кнопкой → **Открыть**
 4. Дальше следуйте разделу [Первый запуск](#первый-запуск)

@@ -7,7 +7,25 @@ final class AccountManager {
     private(set) var accounts: [Account] = []
     private(set) var statuses: [UUID: AccountStatus] = [:]
     private(set) var dailyStatsByAccount: [UUID: DailyStats] = [:]
+    private(set) var maxUserIdsByAccount: [UUID: String] = [:]
     private var runtimes: [UUID: AccountRuntime] = [:]
+
+    var duplicateMaxUserIdWarning: String? {
+        var byUserId: [String: [Account]] = [:]
+        for account in accounts where account.enabled {
+            guard let userId = maxUserIdsByAccount[account.id] else { continue }
+            byUserId[userId, default: []].append(account)
+        }
+        for (_, grouped) in byUserId where grouped.count > 1 {
+            let names = grouped.map(\.name).joined(separator: ", ")
+            return "Аккаунты «\(names)» используют один MAX (совпадает userId). У дополнительных мониторинг отключён."
+        }
+        return nil
+    }
+
+    func monitoringNote(for accountId: UUID) -> String? {
+        runtimes[accountId]?.monitoringPauseReason
+    }
 
     var aggregatedDailyStats: DailyStats {
         dailyStatsByAccount.values.reduce(into: DailyStats()) { result, stats in
@@ -47,6 +65,7 @@ final class AccountManager {
             startRuntime(for: account)
         }
         saveDailyStats()
+        reconcileMonitoring()
     }
 
     func saveAccounts() {
@@ -62,6 +81,7 @@ final class AccountManager {
         accounts[index] = account
         saveAccounts()
         runtimes[account.id]?.updateAccount(account)
+        reconcileMonitoring()
     }
 
     @discardableResult
@@ -95,6 +115,7 @@ final class AccountManager {
         accounts.removeAll { $0.id == accountId }
         statuses[accountId] = nil
         dailyStatsByAccount[accountId] = nil
+        maxUserIdsByAccount[accountId] = nil
         saveAccounts()
         saveDailyStats()
         LogService.shared.log(.appStop, accountId: accountId, message: "Account removed")
@@ -125,6 +146,7 @@ final class AccountManager {
 
     private func startRuntime(for account: Account) {
         let accountId = account.id
+        runtimes[accountId]?.stop()
         let runtime = AccountRuntime(
             account: account,
             statsUpdater: { [weak self] in
@@ -142,7 +164,42 @@ final class AccountManager {
         runtime.onStatsChange = { [weak self] in
             self?.saveDailyStats()
         }
+        runtime.onMaxUserIdChange = { [weak self] userId in
+            self?.noteMaxUserId(accountId: accountId, userId: userId)
+        }
         runtimes[accountId] = runtime
-        runtime.start()
+        reconcileMonitoring()
+    }
+
+    private func noteMaxUserId(accountId: UUID, userId: String) {
+        let previous = maxUserIdsByAccount[accountId]
+        maxUserIdsByAccount[accountId] = userId
+        if previous != userId {
+            LogService.shared.log(.authSuccess, accountId: accountId, message: "MAX userId=\(userId)")
+        }
+        reconcileMonitoring()
+    }
+
+    private func reconcileMonitoring() {
+        let enabled = accounts.filter(\.enabled)
+
+        for account in enabled {
+            runtimes[account.id]?.resumeMonitoring()
+        }
+
+        var byUserId: [String: [Account]] = [:]
+        for account in enabled {
+            guard let userId = maxUserIdsByAccount[account.id] else { continue }
+            byUserId[userId, default: []].append(account)
+        }
+
+        for (_, grouped) in byUserId where grouped.count > 1 {
+            guard let primary = grouped.first else { continue }
+            for account in grouped.dropFirst() {
+                runtimes[account.id]?.suspendMonitoring(
+                    reason: "Тот же MAX userId=\(maxUserIdsByAccount[primary.id] ?? "?") что у «\(primary.name)». Войдите в другой MAX или отключите этот app-аккаунт."
+                )
+            }
+        }
     }
 }

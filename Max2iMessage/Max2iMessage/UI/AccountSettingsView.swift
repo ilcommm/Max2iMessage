@@ -70,6 +70,16 @@ struct AccountSettingsView: View {
     private var accountDetail: some View {
         Form {
             Section("Аккаунт MAX") {
+                if let warning = appState.accountManager.duplicateMaxUserIdWarning {
+                    Text(warning)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                if let note = appState.accountManager.monitoringNote(for: draftAccount.id) {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
                 TextField("Название", text: $draftAccount.name)
                     .onChange(of: draftAccount.name) { persistAccount() }
                 Toggle("Включён", isOn: $draftAccount.enabled)

@@ -37,6 +37,7 @@ struct AuthWindowView: View {
                 AuthWebView(accountId: account.id) {
                     appState.accountManager.reloadAccount(account.id)
                 }
+                .id(account.id)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             } else {
