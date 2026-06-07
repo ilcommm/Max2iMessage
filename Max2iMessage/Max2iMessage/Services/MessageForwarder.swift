@@ -20,6 +20,12 @@ struct MessageForwarder: Sendable {
         return "\(name): \(text)"
     }
 
+    func formatNotificationOnly(senderName: String) -> String {
+        let name = senderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return "Новое сообщение в MAX" }
+        return "\(name) написал(а) в MAX"
+    }
+
     func send(to recipient: String, text: String) throws {
         let trimmed = recipient.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw MessageForwarderError.emptyRecipient }
@@ -29,7 +35,6 @@ struct MessageForwarder: Sendable {
 
         let script = """
         tell application "Messages"
-            activate
             set iMessageService to first service whose service type is iMessage
             set targetRecipient to participant "\(escapedRecipient)" of iMessageService
             send "\(escapedText)" to targetRecipient

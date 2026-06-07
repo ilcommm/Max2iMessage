@@ -39,6 +39,7 @@ final class LogService: @unchecked Sendable {
     }
 
     func log(_ event: LogEvent, accountId: UUID? = nil, message: String, level: String = "INFO") {
+        guard !PrivacySettings.isActive else { return }
         let accountPart = accountId.map { " account=\($0.uuidString)" } ?? ""
         let line = "\(isoTimestamp()) [\(level)] event=\(event.rawValue)\(accountPart) \(message)\n"
         queue.async { [self] in
@@ -48,7 +49,12 @@ final class LogService: @unchecked Sendable {
     }
 
     func openLogFile() {
+        guard !PrivacySettings.isActive else { return }
         NSWorkspace.shared.open(AppPaths.logFile)
+    }
+
+    var isLoggingEnabled: Bool {
+        !PrivacySettings.isActive
     }
 
     private func write(_ line: String) {

@@ -5,6 +5,14 @@ struct MenuBarView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.openWindow) private var openWindow
 
+    private var showAuthEntry: Bool {
+        !PrivacySettings.isActive || appState.accountManager.hasAccountNeedingAuth()
+    }
+
+    private var showLogsEntry: Bool {
+        LogService.shared.isLoggingEnabled
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Max2iMessage")
@@ -73,21 +81,8 @@ struct MenuBarView: View {
             }
             .keyboardShortcut(",")
 
-            if appState.accountManager.accounts.count == 1 {
-                Button("Войти в MAX") {
-                    openWindow(id: "auth")
-                    NSApp.activate(ignoringOtherApps: true)
-                }
-            } else {
-                Menu("Войти в MAX") {
-                    ForEach(appState.accountManager.accounts) { account in
-                        Button(account.name) {
-                            appState.selectAccount(account.id)
-                            openWindow(id: "auth")
-                            NSApp.activate(ignoringOtherApps: true)
-                        }
-                    }
-                }
+            if showAuthEntry {
+                authButtons
             }
 
             Button("Добавить аккаунт…") {
@@ -100,8 +95,10 @@ struct MenuBarView: View {
                 appState.accountManager.reloadAllAccounts()
             }
 
-            Button("Открыть логи") {
-                appState.openLogs()
+            if showLogsEntry {
+                Button("Открыть логи") {
+                    appState.openLogs()
+                }
             }
 
             Divider()
@@ -116,6 +113,46 @@ struct MenuBarView: View {
         .buttonStyle(.plain)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private var authButtons: some View {
+        if PrivacySettings.isActive {
+            let needingAuth = appState.accountManager.accounts.filter {
+                appState.accountManager.shouldOfferAuth(for: $0.id)
+            }
+            if needingAuth.count == 1 {
+                Button("Войти в MAX") {
+                    openAuth(for: needingAuth[0].id)
+                }
+            } else if needingAuth.count > 1 {
+                Menu("Войти в MAX") {
+                    ForEach(needingAuth) { account in
+                        Button(account.name) {
+                            openAuth(for: account.id)
+                        }
+                    }
+                }
+            }
+        } else if appState.accountManager.accounts.count == 1 {
+            Button("Войти в MAX") {
+                openAuth(for: appState.accountManager.accounts[0].id)
+            }
+        } else {
+            Menu("Войти в MAX") {
+                ForEach(appState.accountManager.accounts) { account in
+                    Button(account.name) {
+                        openAuth(for: account.id)
+                    }
+                }
+            }
+        }
+    }
+
+    private func openAuth(for accountId: UUID) {
+        appState.selectAccount(accountId)
+        openWindow(id: "auth")
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func statusColor(_ status: AccountStatus) -> Color {

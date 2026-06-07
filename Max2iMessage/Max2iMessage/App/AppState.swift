@@ -5,6 +5,7 @@ import SwiftUI
 @Observable
 final class AppState {
     let accountManager = AccountManager()
+    let preferencesStore = AppPreferencesStore.shared
     var selectedAccountId: UUID?
     var launchAtLogin = LaunchAtLoginService.isEnabled
     private var didBootstrap = false
@@ -60,5 +61,10 @@ final class AppState {
         } catch {
             LogService.shared.log(.error, message: "Launch at login failed: \(error.localizedDescription)", level: "ERROR")
         }
+    }
+
+    func setPrivacyModeEnabled(_ enabled: Bool) {
+        preferencesStore.privacyModeEnabled = enabled
+        accountManager.refreshPrivacySensitiveSettings()
     }
 }

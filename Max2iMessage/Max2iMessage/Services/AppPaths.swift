@@ -15,6 +15,10 @@ enum AppPaths {
         appSupport.appendingPathComponent("accounts.json")
     }
 
+    static var preferencesFile: URL {
+        appSupport.appendingPathComponent("preferences.json")
+    }
+
     static func dedupFile(accountId: UUID) -> URL {
         appSupport
             .appendingPathComponent("dedup", isDirectory: true)

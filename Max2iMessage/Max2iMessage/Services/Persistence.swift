@@ -51,4 +51,17 @@ final class Persistence: Sendable {
         guard let data = try? encoder.encode(raw) else { return }
         try? data.write(to: AppPaths.dailyStatsFile(), options: .atomic)
     }
+
+    func loadPreferences() -> AppPreferences {
+        guard let data = try? Data(contentsOf: AppPaths.preferencesFile),
+              let preferences = try? decoder.decode(AppPreferences.self, from: data) else {
+            return .default
+        }
+        return preferences
+    }
+
+    func savePreferences(_ preferences: AppPreferences) {
+        guard let data = try? encoder.encode(preferences) else { return }
+        try? data.write(to: AppPaths.preferencesFile, options: .atomic)
+    }
 }

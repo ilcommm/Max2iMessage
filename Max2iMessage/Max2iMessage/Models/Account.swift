@@ -14,6 +14,7 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
     var traceRealtimeLogging: Bool
     var muteProbeLogging: Bool
     var smartForwardEnabled: Bool
+    var forwardNotificationOnly: Bool
 
     init(
         id: UUID,
@@ -28,7 +29,8 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
         verboseChatLogging: Bool = false,
         traceRealtimeLogging: Bool = true,
         muteProbeLogging: Bool = false,
-        smartForwardEnabled: Bool = true
+        smartForwardEnabled: Bool = true,
+        forwardNotificationOnly: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -43,6 +45,7 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
         self.traceRealtimeLogging = traceRealtimeLogging
         self.muteProbeLogging = muteProbeLogging
         self.smartForwardEnabled = smartForwardEnabled
+        self.forwardNotificationOnly = forwardNotificationOnly
     }
 
     static func makeDefault() -> Account {
@@ -74,6 +77,7 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
         traceRealtimeLogging = try container.decodeIfPresent(Bool.self, forKey: .traceRealtimeLogging) ?? true
         muteProbeLogging = try container.decodeIfPresent(Bool.self, forKey: .muteProbeLogging) ?? false
         smartForwardEnabled = try container.decodeIfPresent(Bool.self, forKey: .smartForwardEnabled) ?? true
+        forwardNotificationOnly = try container.decodeIfPresent(Bool.self, forKey: .forwardNotificationOnly) ?? false
     }
 
     var effectiveRecipient: String {
@@ -84,5 +88,18 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
         case id, name, iMessageRecipient, contactIdentifier, enabled
         case skipGroupChats, skipOwnMessages, skipMutedChats, forwardAttachmentsPlaceholder
         case verboseChatLogging, traceRealtimeLogging, muteProbeLogging, smartForwardEnabled
+        case forwardNotificationOnly
+    }
+
+    var effectiveVerboseChatLogging: Bool {
+        !PrivacySettings.isActive && verboseChatLogging
+    }
+
+    var effectiveTraceRealtimeLogging: Bool {
+        !PrivacySettings.isActive && traceRealtimeLogging
+    }
+
+    var effectiveMuteProbeLogging: Bool {
+        !PrivacySettings.isActive && muteProbeLogging
     }
 }

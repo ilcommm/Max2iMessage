@@ -472,10 +472,15 @@ final class AccountRuntime: MaxWebSessionDelegate {
             return
         }
 
-        let body = forwarder.formatMessage(
-            senderName: message.senderName,
-            text: displayText
-        )
+        let body: String
+        if account.forwardNotificationOnly {
+            body = forwarder.formatNotificationOnly(senderName: message.senderName)
+        } else {
+            body = forwarder.formatMessage(
+                senderName: message.senderName,
+                text: displayText
+            )
+        }
 
         do {
             try forwarder.send(to: recipient, text: body)
@@ -585,17 +590,21 @@ final class AccountRuntime: MaxWebSessionDelegate {
         }
     }
 
+    func refreshMonitorOptions() {
+        syncMonitorOptions()
+    }
+
     private func syncMonitorOptions() {
         Task {
             await session.syncMonitorOptions(
-                verboseLogging: account.verboseChatLogging,
-                muteProbeLogging: account.muteProbeLogging
+                verboseLogging: account.effectiveVerboseChatLogging,
+                muteProbeLogging: account.effectiveMuteProbeLogging
             )
         }
     }
 
     private func handleMessageObserved(_ payload: [String: Any]) {
-        guard account.traceRealtimeLogging else { return }
+        guard account.effectiveTraceRealtimeLogging else { return }
         let chatId = payload["chatId"] as? String ?? "?"
         let messageId = payload["messageId"] as? String ?? "?"
         let sessionReady = payload["sessionReady"] as? Bool ?? false
@@ -607,7 +616,7 @@ final class AccountRuntime: MaxWebSessionDelegate {
     }
 
     private func tracePipeline(_ stage: String, _ message: MaxMessage) {
-        guard account.traceRealtimeLogging else { return }
+        guard account.effectiveTraceRealtimeLogging else { return }
         LogService.shared.log(
             .pipelineTrace,
             accountId: accountId,
@@ -622,7 +631,7 @@ final class AccountRuntime: MaxWebSessionDelegate {
         }
 
         let msgAge = ping.lastMessageAt > 0 ? ping.now - ping.lastMessageAt : -1
-        if account.traceRealtimeLogging && tick % 4 == 0 {
+        if account.effectiveTraceRealtimeLogging && tick % 4 == 0 {
             LogService.shared.log(
                 .pipelineTrace,
                 accountId: accountId,
@@ -760,7 +769,7 @@ final class AccountRuntime: MaxWebSessionDelegate {
             }
         }
 
-        if account.traceRealtimeLogging {
+        if account.effectiveTraceRealtimeLogging {
             let nowMs = Int(Date().timeIntervalSince1970 * 1000)
             let msgAge = lastHeartbeatMessageAt > 0 ? nowMs - lastHeartbeatMessageAt : -1
             LogService.shared.log(

@@ -6,6 +6,14 @@ struct AccountSettingsView: View {
     @State private var draftAccount = Account.makeDefault()
     @State private var saveStatus: String?
 
+    private var showDiagnostics: Bool {
+        !PrivacySettings.isActive
+    }
+
+    private var showAuthButton: Bool {
+        appState.accountManager.shouldOfferAuth(for: draftAccount.id)
+    }
+
     var body: some View {
         NavigationSplitView {
             accountsList
@@ -130,32 +138,46 @@ struct AccountSettingsView: View {
                     .onChange(of: draftAccount.forwardAttachmentsPlaceholder) { persistAccount() }
             }
 
+            Section("Пересылка в iMessage") {
+                Picker("Формат сообщения", selection: $draftAccount.forwardNotificationOnly) {
+                    Text("Полный текст (Имя: сообщение)").tag(false)
+                    Text("Только уведомление (Имя написал(а) в MAX)").tag(true)
+                }
+                .onChange(of: draftAccount.forwardNotificationOnly) { persistAccount() }
+                Text("«Только уведомление» не передаёт текст сообщения — удобно, если Mac используют несколько человек и вы не хотите, чтобы переписка сохранялась в Messages на этом компьютере.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Приложение") {
                 Toggle("Запускать при входе в macOS", isOn: Binding(
                     get: { appState.launchAtLogin },
                     set: { appState.setLaunchAtLogin($0) }
                 ))
-            }
 
-            Section("Диагностика") {
-                Toggle("Трассировка realtime (pipeline_trace)", isOn: $draftAccount.traceRealtimeLogging)
-                    .onChange(of: draftAccount.traceRealtimeLogging) { persistAccount() }
-                Toggle("Поиск mute/уведомлений (mute_probe)", isOn: $draftAccount.muteProbeLogging)
-                    .onChange(of: draftAccount.muteProbeLogging) { persistAccount() }
-                Text("Включите, затем заглушите/разглушите чат в MAX — в логах появятся event=mute_probe с найденными полями.")
+                Toggle("Режим приватности", isOn: Binding(
+                    get: { PrivacySettings.displayPrivacyModeEnabled },
+                    set: { appState.setPrivacyModeEnabled($0) }
+                ))
+                .disabled(!PrivacySettings.canToggle)
+                Text(privacyModeDescription)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Toggle("Подробные логи чатов (chat_raw)", isOn: $draftAccount.verboseChatLogging)
-                    .onChange(of: draftAccount.verboseChatLogging) { persistAccount() }
-                Button("Войти в MAX для этого аккаунта") {
-                    openWindow(id: "auth")
+            }
+
+            if PrivacySettings.isActive && showAuthButton {
+                Section("Авторизация MAX") {
+                    Button("Войти в MAX для этого аккаунта") {
+                        openWindow(id: "auth")
+                    }
+                    Text("Интерфейс MAX будет показан только для входа и закроется автоматически.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                Button("Отправить тестовое iMessage") {
-                    sendTestMessage()
-                }
-                Button("Открыть логи") {
-                    appState.openLogs()
-                }
+            }
+
+            if showDiagnostics {
+                diagnosticsSection
             }
 
             if let saveStatus {
@@ -178,6 +200,39 @@ struct AccountSettingsView: View {
         .padding()
         .navigationTitle(draftAccount.name)
         .onChange(of: draftAccount.contactIdentifier) { persistAccount() }
+    }
+
+    private var privacyModeDescription: String {
+        if PrivacySettings.canToggle {
+            return "Скрывает интерфейс MAX после входа, отключает журнал и диагностику. Включён по умолчанию; в Debug-сборке можно выключить для отладки."
+        }
+        return "Включён всегда в собранной версии. Скрывает интерфейс MAX после входа, не пишет журнал и не показывает диагностические настройки — чтобы на этом Mac нельзя было просмотреть чужие диалоги."
+    }
+
+    @ViewBuilder
+    private var diagnosticsSection: some View {
+        Section("Диагностика") {
+            Toggle("Трассировка realtime (pipeline_trace)", isOn: $draftAccount.traceRealtimeLogging)
+                .onChange(of: draftAccount.traceRealtimeLogging) { persistAccount() }
+            Toggle("Поиск mute/уведомлений (mute_probe)", isOn: $draftAccount.muteProbeLogging)
+                .onChange(of: draftAccount.muteProbeLogging) { persistAccount() }
+            Text("Включите, затем заглушите/разглушите чат в MAX — в логах появятся event=mute_probe с найденными полями.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Toggle("Подробные логи чатов (chat_raw)", isOn: $draftAccount.verboseChatLogging)
+                .onChange(of: draftAccount.verboseChatLogging) { persistAccount() }
+            if showAuthButton {
+                Button("Войти в MAX для этого аккаунта") {
+                    openWindow(id: "auth")
+                }
+            }
+            Button("Отправить тестовое iMessage") {
+                sendTestMessage()
+            }
+            Button("Открыть логи") {
+                appState.openLogs()
+            }
+        }
     }
 
     private var canDeleteSelectedAccount: Bool {
@@ -211,14 +266,17 @@ struct AccountSettingsView: View {
             return
         }
         let forwarder = MessageForwarder()
-        do {
-            try forwarder.send(
-                to: recipient,
-                text: forwarder.formatMessage(
-                    senderName: "Тест",
-                    text: "Проверка Max2iMessage (\(draftAccount.name))"
-                )
+        let text: String
+        if draftAccount.forwardNotificationOnly {
+            text = forwarder.formatNotificationOnly(senderName: "Тест")
+        } else {
+            text = forwarder.formatMessage(
+                senderName: "Тест",
+                text: "Проверка Max2iMessage (\(draftAccount.name))"
             )
+        }
+        do {
+            try forwarder.send(to: recipient, text: text)
             saveStatus = "Тест отправлен"
         } catch {
             saveStatus = "Ошибка: \(error.localizedDescription)"

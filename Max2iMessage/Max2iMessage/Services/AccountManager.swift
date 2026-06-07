@@ -136,6 +136,26 @@ final class AccountManager {
         runtimes[accountId]?.webView
     }
 
+    func hasAccountNeedingAuth() -> Bool {
+        accounts.contains { shouldOfferAuth(for: $0.id) }
+    }
+
+    func shouldOfferAuth(for accountId: UUID) -> Bool {
+        if !PrivacySettings.isActive { return true }
+        let status = statuses[accountId] ?? .offline
+        return status == .needsAuth || status == .offline
+    }
+
+    func refreshPrivacySensitiveSettings() {
+        for runtime in runtimes.values {
+            runtime.refreshMonitorOptions()
+        }
+    }
+
+    func status(for accountId: UUID) -> AccountStatus {
+        statuses[accountId] ?? .offline
+    }
+
     func shutdown() {
         for runtime in runtimes.values {
             runtime.stop()
