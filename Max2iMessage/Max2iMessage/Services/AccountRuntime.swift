@@ -29,6 +29,10 @@ final class AccountRuntime: MaxWebSessionDelegate {
     private var chatReadMarks: [String: Int64] = [:]
     private var pendingForwardMessageIds: Set<String> = []
     private var pendingForwardTasks: [String: Task<Void, Never>] = [:]
+    private let lastReplyStore: LastReplyStore
+    private var pendingBridgeReplyTexts: Set<String> = []
+    private var recentBridgeSentTexts: [String: Date] = [:]
+    private var inboundReplyTask: Task<Void, Never>?
 
     private var forwardDelayNanoseconds: UInt64 {
         let seconds = max(0, account.forwardDelaySeconds)
@@ -36,20 +40,24 @@ final class AccountRuntime: MaxWebSessionDelegate {
     }
 
     var status: AccountStatus = .offline
+    private(set) var replyStatusMessage: String?
     var onStatusChange: ((AccountStatus) -> Void)?
     var onStatsChange: (() -> Void)?
     var onMaxUserIdChange: ((String) -> Void)?
+    var onReplyStatusChange: ((String?) -> Void)?
 
     private let statsUpdater: () -> DailyStats
     private let statsRecorder: (DailyStats) -> Void
 
     init(
         account: Account,
+        lastReplyStore: LastReplyStore,
         statsUpdater: @escaping () -> DailyStats,
         statsRecorder: @escaping (DailyStats) -> Void
     ) {
         self.accountId = account.id
         self.account = account
+        self.lastReplyStore = lastReplyStore
         self.session = MaxWebSession(accountId: account.id)
         self.dedupStore = DedupStore(accountId: account.id)
         self.globalForwardDedup = .shared
@@ -112,6 +120,8 @@ final class AccountRuntime: MaxWebSessionDelegate {
     private func tearDownMonitoring() {
         isMonitoringActive = false
         cancelPendingForwardTasks()
+        inboundReplyTask?.cancel()
+        inboundReplyTask = nil
         reconnectTask?.cancel()
         reconnectTask = nil
         syncWatchdogTask?.cancel()
@@ -203,8 +213,96 @@ final class AccountRuntime: MaxWebSessionDelegate {
             handleMessageObserved(event.payload)
         case .readMark:
             handleReadMark(event.payload)
+        case .wsOutSend:
+            if account.effectiveTraceRealtimeLogging {
+                let chatId = MessageMonitorParser.string(from: event.payload["chatId"]) ?? "?"
+                let textLength = event.payload["textLength"] as? Int ?? 0
+                LogService.shared.log(
+                    .pipelineTrace,
+                    accountId: accountId,
+                    message: "ws_out_send chat=\(chatId) textLength=\(textLength)"
+                )
+            }
+        case .maxSendResult:
+            let ok = MessageMonitorParser.boolValue(event.payload["ok"])
+            let chatId = MessageMonitorParser.string(from: event.payload["chatId"]) ?? "?"
+            if ok {
+                LogService.shared.log(.replySent, accountId: accountId, message: "MAX send confirmed chat=\(chatId)")
+            } else {
+                let error = MessageMonitorParser.string(from: event.payload["error"]) ?? "unknown"
+                LogService.shared.log(.replyFailed, accountId: accountId, message: "MAX send failed chat=\(chatId) error=\(error)", level: "ERROR")
+            }
         case .domActivity, .unknown:
             break
+        }
+    }
+
+    func handleInboundIMessage(_ inbound: InboundIMessage) {
+        guard account.supportsIMessageReply else { return }
+        guard account.enabled, isMonitoringActive else { return }
+
+        let text = inbound.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        guard !IMessagesDatabaseMonitor.looksLikeForwardedNotification(text) else { return }
+        guard !lastReplyStore.wasRecentlySentToIMessage(accountId: accountId, text: text) else { return }
+        guard !pendingBridgeReplyTexts.contains(text) else { return }
+
+        LogService.shared.log(
+            .replyDetected,
+            accountId: accountId,
+            message: "iMessage reply row=\(inbound.rowId) textLength=\(text.count)"
+        )
+
+        inboundReplyTask?.cancel()
+        inboundReplyTask = Task { [weak self] in
+            await self?.processInboundReply(text)
+        }
+    }
+
+    private func processInboundReply(_ text: String) async {
+        guard !Task.isCancelled else { return }
+
+        guard let target = lastReplyStore.target(for: accountId) else {
+            updateReplyStatus("Нет активного адресата")
+            return
+        }
+
+        if target.isExpired(windowMinutes: account.replyWindowMinutes) {
+            lastReplyStore.clearTarget(accountId: accountId)
+            updateReplyStatus("Окно ответа истекло")
+            return
+        }
+
+        guard isSessionSynced else {
+            updateReplyStatus("MAX не синхронизирован")
+            recordReplyError()
+            return
+        }
+
+        pendingBridgeReplyTexts.insert(text)
+        noteBridgeSentText(text)
+        defer { pendingBridgeReplyTexts.remove(text) }
+
+        let result = await session.sendText(chatId: target.chatId, text: text)
+        guard !Task.isCancelled else { return }
+
+        if result.ok {
+            var updated = statsUpdater()
+            updated.recordReply()
+            statsRecorder(updated)
+            onStatsChange?()
+            updateReplyStatus("Ответ отправлен в MAX (\(target.senderName))")
+            LogService.shared.log(
+                .replySent,
+                accountId: accountId,
+                message: "chat=\(target.chatId) to=\(target.senderName) cid=\(result.cid ?? 0)"
+            )
+        } else {
+            recentBridgeSentTexts.removeValue(forKey: text)
+            recordReplyError()
+            let error = result.error ?? "unknown"
+            updateReplyStatus("Ошибка ответа: \(error)")
+            LogService.shared.log(.replyFailed, accountId: accountId, message: error, level: "ERROR")
         }
     }
 
@@ -274,6 +372,17 @@ final class AccountRuntime: MaxWebSessionDelegate {
                 .messageDetected,
                 accountId: accountId,
                 message: "Skipped historical message id=\(message.id) chat=\(message.chatId)"
+            )
+            return
+        }
+
+        if isRecentBridgeSentText(message.displayText) {
+            recordFiltered()
+            tracePipeline("skip_bridge_echo", message)
+            LogService.shared.log(
+                .messageDetected,
+                accountId: accountId,
+                message: "Skipped bridge echo id=\(message.id)"
             )
             return
         }
@@ -525,6 +634,7 @@ final class AccountRuntime: MaxWebSessionDelegate {
         }
 
         var sentAny = false
+        var sentViaIMessage = false
         var lastError: Error?
 
         if account.forwardDestination == .iMessage || account.forwardDestination == .both {
@@ -533,6 +643,7 @@ final class AccountRuntime: MaxWebSessionDelegate {
                 do {
                     try forwarder.sendiMessage(to: recipient, text: body)
                     sentAny = true
+                    sentViaIMessage = true
                     LogService.shared.log(
                         .messageSent,
                         accountId: accountId,
@@ -573,6 +684,19 @@ final class AccountRuntime: MaxWebSessionDelegate {
         var updated = statsUpdater()
         if sentAny {
             updated.recordSent()
+            if sentViaIMessage && account.supportsIMessageReply {
+                lastReplyStore.setTarget(
+                    accountId: accountId,
+                    target: LastReplyTarget(
+                        chatId: message.chatId,
+                        senderName: message.senderName,
+                        messageId: message.id,
+                        forwardedAt: .now
+                    )
+                )
+                lastReplyStore.noteOutboundText(accountId: accountId, text: body)
+                updateReplyStatus("Ожидает ответ: \(message.senderName)")
+            }
         } else {
             updated.recordError()
             if let lastError {
@@ -920,5 +1044,36 @@ final class AccountRuntime: MaxWebSessionDelegate {
                 noteMaxUserId(userId)
             }
         }
+    }
+
+    private func updateReplyStatus(_ message: String?) {
+        replyStatusMessage = message
+        onReplyStatusChange?(message)
+    }
+
+    private func recordReplyError() {
+        var updated = statsUpdater()
+        updated.recordError()
+        statsRecorder(updated)
+        onStatsChange?()
+    }
+
+    private func noteBridgeSentText(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        recentBridgeSentTexts[trimmed] = Date()
+        pruneBridgeSentTexts()
+    }
+
+    private func isRecentBridgeSentText(_ text: String) -> Bool {
+        pruneBridgeSentTexts()
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return recentBridgeSentTexts[trimmed] != nil
+    }
+
+    private func pruneBridgeSentTexts() {
+        let cutoff = Date().addingTimeInterval(-120)
+        recentBridgeSentTexts = recentBridgeSentTexts.filter { $0.value >= cutoff }
     }
 }

@@ -25,6 +25,28 @@
 - **Режим приватности** — в собранной версии включён всегда: скрывает интерфейс MAX после входа, не пишет журнал
 - **Формат пересылки** — полный текст или только «Имя написал(а) в MAX» (на каждый аккаунт)
 - Фильтры: свои сообщения, групповые чаты, заглушённые чаты, вложения без текста
+- **Ответы в MAX через iMessage (бета)** — ответьте на пересланное уведомление с iPhone или Apple Watch, и текст уйдёт последнему отправителю в MAX
+
+## Ответы в MAX через iMessage (бета)
+
+> Экспериментальная функция. Протокол MAX непубличный; поведение может измениться.
+
+Двусторонний мост для личных чатов: MAX → iMessage → быстрый ответ → MAX.
+
+1. В **Настройки → Пересылка** укажите получателя iMessage (телефон или Apple ID).
+2. В **Настройки → Ответы в MAX** включите «Разрешить ответы в MAX через iMessage».
+3. Выдайте **Full Disk Access** (Полный доступ к диску) для Max2iMessage — без этого Mac не сможет прочитать входящий ответ из Messages.
+4. После пересылки уведомления ответьте в iMessage с iPhone или Apple Watch (Quick Reply).
+5. Текст отправится **последнему пересланному** отправителю в MAX (в пределах окна ответа, по умолчанию 10 мин).
+
+| Условие | Подробнее |
+|---------|-----------|
+| Mac включён | Max2iMessage запущен, сессия MAX Online |
+| Только iMessage | Email не поддерживает quick reply |
+| Личные чаты | Групповые чаты MAX по-прежнему фильтруются |
+| Один адресат | Если написали несколько человек подряд, ответ уйдёт последнему пересланному |
+
+Статус ответа отображается в menu bar и в настройках аккаунта («Ожидает ответ», «Ответ отправлен в MAX»).
 
 ## Требования
 
@@ -35,7 +57,7 @@
 
 ## Установка (без Xcode)
 
-1. Скачайте **Max2iMessage-v1.4-macos.zip** из [Releases](https://github.com/ilcommm/Max2iMessage/releases/latest)
+1. Скачайте **Max2iMessage-v1.5-macos.zip** из [Releases](https://github.com/ilcommm/Max2iMessage/releases/latest)
 2. Распакуйте архив и перетащите **Max2iMessage.app** в папку «Программы»
 3. При первом запуске macOS может заблокировать приложение — откройте **Системные настройки → Конфиденциальность и безопасность** и нажмите **Всё равно открыть**, либо щёлкните по `.app` правой кнопкой → **Открыть**
 4. Дальше следуйте разделу [Первый запуск](#первый-запуск)
@@ -128,6 +150,7 @@
 |------------|-------|
 | Automation → Messages | Отправка iMessage через AppleScript |
 | Automation → Mail | Отправка Email через AppleScript |
+| Full Disk Access | Чтение входящих ответов iMessage (только для бета-функции «Ответы в MAX») |
 | Contacts | Выбор получателя из контактов |
 | Network | Подключение к web.max.ru |
 
@@ -153,18 +176,21 @@
 - [ ] В Release-сборке app.log не создаётся, «Открыть логи» скрыт
 - [ ] В Debug из Xcode при выключенном режиме приватности события пишутся в app.log
 - [ ] Toggle автозапуска работает (Системные настройки → Общие → Объекты входа)
+- [ ] «Ответы в MAX (бета)»: пересылка → quick reply в iMessage → сообщение уходит в MAX последнему отправителю
+- [ ] Full Disk Access выдан, в настройках «Доступ к Messages: есть»
 
 ## Архитектура
 
 ```
 MenuBarView → AppState → AccountManager → AccountRuntime (per account)
                                               ├── MaxWebSession (WKWebView)
-                                              ├── max-monitor.js (WS hook)
+                                              ├── max-monitor.js (WS hook, send opcode 64)
                                               ├── DedupStore
-                                              └── MessageForwarder (AppleScript → Messages / Mail)
+                                              ├── MessageForwarder (AppleScript → Messages / Mail)
+                                              └── IMessagesDatabaseMonitor (chat.db, ответы)
 ```
 
-Мониторинг сообщений: injected JS перехватывает WebSocket-пакеты страницы MAX и отправляет `NOTIF_MESSAGE` (opcode 128) и `NOTIF_MARK` (opcode 130) в Swift через `WKScriptMessageHandler`. Умная пересылка в `AccountRuntime` откладывает отправку и сверяет `mark` с позицией прочтения.
+Мониторинг сообщений: injected JS перехватывает WebSocket-пакеты страницы MAX и отправляет `NOTIF_MESSAGE` (opcode 128) и `NOTIF_MARK` (opcode 130) в Swift через `WKScriptMessageHandler`. Умная пересылка в `AccountRuntime` откладывает отправку и сверяет `mark` с позицией прочтения. Ответы (бета): `IMessagesDatabaseMonitor` читает входящий iMessage из `~/Library/Messages/chat.db`, `max-monitor.js` отправляет текст обратно в MAX через WebSocket opcode 64.
 
 ## Ограничения
 
@@ -172,6 +198,7 @@ MenuBarView → AppState → AccountManager → AccountRuntime (per account)
 - Для стабильной работы требуется активная сессия web.max.ru
 - Отправка iMessage зависит от приложения Messages и разрешения Automation
 - Отправка Email зависит от приложения Mail, настроенного исходящего аккаунта и разрешения Automation
+- **Ответы в MAX (бета)** требуют Full Disk Access, включённого Mac и работающей сессии MAX; ответ с часов идёт через iMessage на Mac, а не напрямую в MAX
 
 ## Контакты
 

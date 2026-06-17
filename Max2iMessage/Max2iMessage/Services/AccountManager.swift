@@ -8,7 +8,11 @@ final class AccountManager {
     private(set) var statuses: [UUID: AccountStatus] = [:]
     private(set) var dailyStatsByAccount: [UUID: DailyStats] = [:]
     private(set) var maxUserIdsByAccount: [UUID: String] = [:]
+    private(set) var replyStatuses: [UUID: String] = [:]
+    private(set) var iMessageDatabaseAccess = false
+    private(set) var iMessageDatabaseStatus: String?
     private var runtimes: [UUID: AccountRuntime] = [:]
+    private let lastReplyStore = LastReplyStore()
 
     var duplicateMaxUserIdWarning: String? {
         var byUserId: [String: [Account]] = [:]
@@ -32,6 +36,7 @@ final class AccountManager {
             result.filtered += stats.filtered
             result.received += stats.received
             result.sent += stats.sent
+            result.replies += stats.replies
             result.errors += stats.errors
         }
     }
@@ -41,7 +46,8 @@ final class AccountManager {
             AccountSnapshot(
                 account: account,
                 status: statuses[account.id] ?? .offline,
-                stats: dailyStatsByAccount[account.id] ?? DailyStats()
+                stats: dailyStatsByAccount[account.id] ?? DailyStats(),
+                replyStatus: replyStatuses[account.id]
             )
         }
     }
@@ -66,6 +72,66 @@ final class AccountManager {
         }
         saveDailyStats()
         reconcileMonitoring()
+        startReplyMonitoringIfNeeded()
+    }
+
+    private func startReplyMonitoringIfNeeded() {
+        let monitor = IMessagesDatabaseMonitor.shared
+        monitor.onInboundMessage = { [weak self] accountId, message in
+            Task { @MainActor in
+                self?.dispatchInboundIMessage(message, triggeredAccountId: accountId)
+            }
+        }
+        monitor.start()
+        refreshReplyMonitoring()
+        refreshIMessageDatabaseAccess()
+    }
+
+    private func dispatchInboundIMessage(_ message: InboundIMessage, triggeredAccountId: UUID) {
+        guard let triggeredAccount = account(for: triggeredAccountId) else { return }
+        let recipient = triggeredAccount.effectiveRecipient
+
+        let candidates = accounts.filter { account in
+            account.supportsIMessageReply
+                && IMessagesDatabaseMonitor.handlesMatch(account.effectiveRecipient, recipient)
+        }
+
+        let activeCandidates = candidates.filter { account in
+            guard let target = lastReplyStore.target(for: account.id) else { return false }
+            return !target.isExpired(windowMinutes: account.replyWindowMinutes)
+        }
+
+        let selected = activeCandidates.max(by: {
+            let left = lastReplyStore.target(for: $0.id)?.forwardedAt ?? .distantPast
+            let right = lastReplyStore.target(for: $1.id)?.forwardedAt ?? .distantPast
+            return left < right
+        }) ?? candidates.first(where: { $0.id == triggeredAccountId }) ?? candidates.first
+
+        guard let accountId = selected?.id else { return }
+        runtimes[accountId]?.handleInboundIMessage(message)
+    }
+
+    func refreshIMessageDatabaseAccess() {
+        IMessagesDatabaseMonitor.shared.refreshAccess(waitUntilDone: true)
+        iMessageDatabaseAccess = IMessagesDatabaseMonitor.shared.hasDatabaseAccess
+        if iMessageDatabaseAccess {
+            iMessageDatabaseStatus = "Доступ к Messages: есть (\(AppPaths.messagesDatabaseFile.path))"
+        } else {
+            let detail = IMessagesDatabaseMonitor.shared.lastAccessError
+                ?? "Нет доступа к \(AppPaths.messagesDatabaseFile.path)"
+            iMessageDatabaseStatus = detail
+        }
+    }
+
+    private func refreshReplyMonitoring() {
+        let monitor = IMessagesDatabaseMonitor.shared
+        for account in accounts {
+            if account.supportsIMessageReply {
+                monitor.register(accountId: account.id, recipient: account.effectiveRecipient)
+            } else {
+                monitor.unregister(accountId: account.id)
+            }
+        }
     }
 
     func saveAccounts() {
@@ -82,6 +148,7 @@ final class AccountManager {
         saveAccounts()
         runtimes[account.id]?.updateAccount(account)
         reconcileMonitoring()
+        refreshReplyMonitoring()
     }
 
     @discardableResult
@@ -114,6 +181,7 @@ final class AccountManager {
         runtimes[accountId] = nil
         accounts.removeAll { $0.id == accountId }
         statuses[accountId] = nil
+        replyStatuses[accountId] = nil
         dailyStatsByAccount[accountId] = nil
         maxUserIdsByAccount[accountId] = nil
         saveAccounts()
@@ -160,6 +228,7 @@ final class AccountManager {
         for runtime in runtimes.values {
             runtime.stop()
         }
+        IMessagesDatabaseMonitor.shared.stop()
         saveDailyStats()
         LogService.shared.log(.appStop, message: "Application stopped")
     }
@@ -169,6 +238,7 @@ final class AccountManager {
         runtimes[accountId]?.stop()
         let runtime = AccountRuntime(
             account: account,
+            lastReplyStore: lastReplyStore,
             statsUpdater: { [weak self] in
                 self?.dailyStatsByAccount[accountId] ?? DailyStats()
             },
@@ -187,8 +257,12 @@ final class AccountManager {
         runtime.onMaxUserIdChange = { [weak self] userId in
             self?.noteMaxUserId(accountId: accountId, userId: userId)
         }
+        runtime.onReplyStatusChange = { [weak self] message in
+            self?.replyStatuses[accountId] = message
+        }
         runtimes[accountId] = runtime
         reconcileMonitoring()
+        refreshReplyMonitoring()
     }
 
     private func noteMaxUserId(accountId: UUID, userId: String) {

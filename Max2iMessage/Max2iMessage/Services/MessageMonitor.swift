@@ -16,6 +16,8 @@ struct BridgeEvent: Sendable {
         case muteProbe
         case messageObserved
         case readMark
+        case wsOutSend
+        case maxSendResult
         case unknown
     }
 
@@ -44,6 +46,8 @@ enum MessageMonitorParser {
         case "message_observed": .messageObserved
         case "mute_probe": .muteProbe
         case "read_mark": .readMark
+        case "ws_out_send": .wsOutSend
+        case "max_send_result": .maxSendResult
         default: .unknown
         }
         return BridgeEvent(type: type, payload: payload)

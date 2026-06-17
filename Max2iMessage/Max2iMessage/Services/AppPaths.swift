@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 enum AppPaths {
     static let appSupport = FileManager.default.urls(
@@ -40,6 +41,18 @@ enum AppPaths {
 
     static var logFile: URL {
         logs.appendingPathComponent("app.log")
+    }
+
+    /// Real user home (`/Users/you`), not the App Sandbox container path.
+    static var realHomeDirectory: URL {
+        if let passwd = getpwuid(getuid()), let directory = passwd.pointee.pw_dir {
+            return URL(fileURLWithPath: String(cString: directory), isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+    }
+
+    static var messagesDatabaseFile: URL {
+        realHomeDirectory.appendingPathComponent("Library/Messages/chat.db")
     }
 
     static func ensureDirectories() {

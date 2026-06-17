@@ -43,7 +43,15 @@ struct MenuBarView: View {
                     HStack(spacing: 6) {
                         Text(snapshot.status.indicator)
                             .foregroundStyle(statusColor(snapshot.status))
-                        Text(snapshot.account.name)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(snapshot.account.name)
+                            if let replyStatus = snapshot.replyStatus {
+                                Text(replyStatus)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
                         Spacer()
                         Text(snapshot.status.displayName)
                             .font(.caption)
@@ -66,7 +74,8 @@ struct MenuBarView: View {
                 .foregroundStyle(.secondary)
             Text("Отфильтровано: \(stats.filtered)")
             Text("Получено: \(stats.received)")
-            Text("Отправлено: \(stats.sent)")
+            Text("Переслано: \(stats.sent)")
+            Text("Ответов в MAX: \(stats.replies)")
             Text("Ошибок: \(stats.errors)")
         }
         .padding(.horizontal, 12)

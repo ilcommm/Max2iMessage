@@ -4,6 +4,7 @@
   "authLocalStorageKey": "__oneme_auth",
   "deviceIdLocalStorageKey": "__oneme_device_id",
   "incomingMessageOpcode": 128,
+  "sendMessageOpcode": 64,
   "readMarkOpcode": 130,
   "chatUpdateOpcode": 135,
   "authSnapshotOpcode": 19,

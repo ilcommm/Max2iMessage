@@ -22,7 +22,10 @@ struct AccountSettingsView: View {
             accountDetail
         }
         .frame(minWidth: 640, minHeight: 520)
-        .onAppear { syncDraftFromSelection() }
+        .onAppear {
+            syncDraftFromSelection()
+            appState.accountManager.refreshIMessageDatabaseAccess()
+        }
         .onChange(of: appState.selectedAccountId) { syncDraftFromSelection() }
         .onChange(of: appState.accountManager.accounts) { syncDraftFromSelection() }
     }
@@ -140,6 +143,59 @@ struct AccountSettingsView: View {
                     Text("Активные получатели: \(draftAccount.destinationSummary)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+            }
+
+            if draftAccount.forwardDestination == .iMessage || draftAccount.forwardDestination == .both {
+                Section("Ответы в MAX") {
+                    Toggle("Разрешить ответы в MAX через iMessage", isOn: $draftAccount.iMessageReplyEnabled)
+                        .onChange(of: draftAccount.iMessageReplyEnabled) {
+                            persistAccount()
+                            appState.accountManager.refreshIMessageDatabaseAccess()
+                        }
+
+                    Text("Ответьте на уведомление с iPhone или Apple Watch — текст уйдёт последнему пересланному отправителю в MAX.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if draftAccount.iMessageReplyEnabled {
+                        HStack {
+                            Text("Окно ответа")
+                            Spacer()
+                            TextField("", value: $draftAccount.replyWindowMinutes, format: .number.precision(.fractionLength(0)))
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 60)
+                                .multilineTextAlignment(.trailing)
+                            Text("мин")
+                                .foregroundStyle(.secondary)
+                        }
+                        .onChange(of: draftAccount.replyWindowMinutes) {
+                            draftAccount.replyWindowMinutes = min(max(draftAccount.replyWindowMinutes, 1), 60)
+                            persistAccount()
+                        }
+
+                        if appState.accountManager.iMessageDatabaseAccess {
+                            Text("Доступ к Messages: есть")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        } else {
+                            Text("Нужен Full Disk Access: Системные настройки → Конфиденциальность и безопасность → Полный доступ к диску → добавьте Max2iMessage.app из Xcode (DerivedData) или из папки «Программы».")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                            if let status = appState.accountManager.iMessageDatabaseStatus {
+                                Text(status)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
+                        }
+
+                        if let replyStatus = appState.accountManager.replyStatuses[draftAccount.id] {
+                            Text(replyStatus)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
 

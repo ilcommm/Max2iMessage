@@ -5,6 +5,7 @@
     if (window.__max2iMessageInstalled) return;
     window.__max2iMessageInstallError = null;
 
+    const OPCODE_MSG_SEND = 64;
     const OPCODE_NOTIF_MESSAGE = 128;
     const OPCODE_NOTIF_MARK = 130;
     const OPCODE_NOTIF_CHAT = 135;
@@ -22,6 +23,8 @@
     let myUserId = null;
     let lastIndexedDbScanAt = 0;
     const userNames = {};
+    let activeWebSocket = null;
+    let outgoingSeq = 1;
 
     function touchPacket() {
         window.__max2iMessageLastPacketAt = Date.now();
@@ -163,8 +166,19 @@
     }
 
     function probeOutgoingPacket(packet) {
-        if (!isMuteProbeLogging() || !packet) return;
+        if (!packet) return;
         const payload = packet.payload || {};
+        if (packet.opcode === OPCODE_MSG_SEND) {
+            post('ws_out_send', {
+                opcode: packet.opcode,
+                cmd: packet.cmd,
+                seq: packet.seq,
+                chatId: safeString(payload.chatId),
+                textLength: payload.message && payload.message.text ? String(payload.message.text).length : 0,
+                cid: payload.message && payload.message.cid != null ? safeString(payload.message.cid) : ''
+            });
+        }
+        if (!isMuteProbeLogging()) return;
         const settingsSummary = summarizeSettingsChats(payload.settings) || summarizeSettingsChats(payload.config);
         const hints = findNotificationHints(packet);
         postMuteProbe({
@@ -1075,14 +1089,15 @@
             const nativeSend = ws.send.bind(ws);
             ws.send = function (data) {
                 try {
-                    if (isMuteProbeLogging()) {
-                        probeOutgoingWS(data);
-                    }
+                    probeOutgoingWS(data);
                 } catch (_) {}
                 return nativeSend(data);
             };
 
             ws.addEventListener('close', function (event) {
+                if (activeWebSocket === ws) {
+                    activeWebSocket = null;
+                }
                 sessionReady = false;
                 publishState();
                 post('ws_closed', {
@@ -1094,6 +1109,7 @@
             });
 
             ws.addEventListener('open', function () {
+                activeWebSocket = ws;
                 sessionReady = everSynced;
                 publishState();
                 post('ws_open', { url: safeString(url), resumed: everSynced });
@@ -1170,6 +1186,62 @@
             everSynced: everSynced
         });
     }
+
+    function coerceChatId(chatId) {
+        const raw = safeString(chatId);
+        if (/^-?\d+$/.test(raw)) {
+            const num = Number(raw);
+            if (Number.isSafeInteger(num)) return num;
+        }
+        return raw;
+    }
+
+    window.__max2iMessageSendText = function (chatId, text) {
+        if (!activeWebSocket || activeWebSocket.readyState !== 1) {
+            return { ok: false, error: 'no_websocket' };
+        }
+        const body = safeString(text).trim();
+        if (!body) {
+            return { ok: false, error: 'empty_text' };
+        }
+        const cid = Date.now();
+        const seq = outgoingSeq++;
+        const packet = {
+            ver: 11,
+            cmd: 0,
+            seq: seq,
+            opcode: OPCODE_MSG_SEND,
+            payload: {
+                chatId: coerceChatId(chatId),
+                message: {
+                    text: body,
+                    cid: cid,
+                    elements: [],
+                    attaches: []
+                },
+                notify: true
+            }
+        };
+        try {
+            activeWebSocket.send(JSON.stringify(packet));
+            post('max_send_result', {
+                ok: true,
+                chatId: safeString(chatId),
+                cid: safeString(cid),
+                seq: seq,
+                textLength: body.length
+            });
+            return { ok: true, cid: cid, seq: seq };
+        } catch (e) {
+            const message = e && e.message ? String(e.message) : String(e);
+            post('max_send_result', {
+                ok: false,
+                chatId: safeString(chatId),
+                error: message
+            });
+            return { ok: false, error: message };
+        }
+    };
 
     window.__max2iMessageNativePing = function () {
         keepPageAwake();

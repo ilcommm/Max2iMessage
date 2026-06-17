@@ -32,6 +32,8 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
     var smartForwardEnabled: Bool
     var forwardDelaySeconds: Double
     var forwardNotificationOnly: Bool
+    var iMessageReplyEnabled: Bool
+    var replyWindowMinutes: Double
 
     init(
         id: UUID,
@@ -50,7 +52,9 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
         muteProbeLogging: Bool = false,
         smartForwardEnabled: Bool = true,
         forwardDelaySeconds: Double = 1.5,
-        forwardNotificationOnly: Bool = false
+        forwardNotificationOnly: Bool = false,
+        iMessageReplyEnabled: Bool = false,
+        replyWindowMinutes: Double = 10
     ) {
         self.id = id
         self.name = name
@@ -69,6 +73,8 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
         self.smartForwardEnabled = smartForwardEnabled
         self.forwardDelaySeconds = forwardDelaySeconds
         self.forwardNotificationOnly = forwardNotificationOnly
+        self.iMessageReplyEnabled = iMessageReplyEnabled
+        self.replyWindowMinutes = replyWindowMinutes
     }
 
     static func makeDefault() -> Account {
@@ -104,6 +110,8 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
         smartForwardEnabled = try container.decodeIfPresent(Bool.self, forKey: .smartForwardEnabled) ?? true
         forwardDelaySeconds = try container.decodeIfPresent(Double.self, forKey: .forwardDelaySeconds) ?? 1.5
         forwardNotificationOnly = try container.decodeIfPresent(Bool.self, forKey: .forwardNotificationOnly) ?? false
+        iMessageReplyEnabled = try container.decodeIfPresent(Bool.self, forKey: .iMessageReplyEnabled) ?? false
+        replyWindowMinutes = try container.decodeIfPresent(Double.self, forKey: .replyWindowMinutes) ?? 10
     }
 
     var effectiveRecipient: String {
@@ -136,11 +144,17 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
         }
     }
 
+    var supportsIMessageReply: Bool {
+        iMessageReplyEnabled
+            && (forwardDestination == .iMessage || forwardDestination == .both)
+            && !effectiveRecipient.isEmpty
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id, name, forwardDestination, iMessageRecipient, emailRecipient, contactIdentifier, enabled
         case skipGroupChats, skipOwnMessages, skipMutedChats, forwardAttachmentsPlaceholder
         case verboseChatLogging, traceRealtimeLogging, muteProbeLogging, smartForwardEnabled
-        case forwardDelaySeconds, forwardNotificationOnly
+        case forwardDelaySeconds, forwardNotificationOnly, iMessageReplyEnabled, replyWindowMinutes
     }
 
     var effectiveVerboseChatLogging: Bool {

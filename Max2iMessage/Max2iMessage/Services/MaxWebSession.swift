@@ -34,6 +34,13 @@ struct NativePingStats: Sendable {
     let now: Int
 }
 
+struct MaxSendTextResult: Sendable {
+    let ok: Bool
+    let cid: Int64?
+    let seq: Int?
+    let error: String?
+}
+
 @MainActor
 final class MaxWebSession: NSObject {
     static let maxURL = URL(string: "https://web.max.ru")!
@@ -230,6 +237,31 @@ final class MaxWebSession: NSObject {
         _ = try? await webView.evaluateJavaScript(script)
     }
 
+    func sendText(chatId: String, text: String) async -> MaxSendTextResult {
+        let chatIdJSON = Self.jsonEncodedLiteral(chatId)
+        let textJSON = Self.jsonEncodedLiteral(text)
+        let script = """
+        (function() {
+            if (typeof window.__max2iMessageSendText !== 'function') {
+                return { ok: false, error: 'send_not_available' };
+            }
+            return window.__max2iMessageSendText(\(chatIdJSON), \(textJSON));
+        })()
+        """
+        do {
+            guard let value = try await webView.evaluateJavaScript(script) as? [String: Any] else {
+                return MaxSendTextResult(ok: false, cid: nil, seq: nil, error: "empty_result")
+            }
+            let ok = value["ok"] as? Bool ?? false
+            let cid = MessageMonitorParser.int64(from: value["cid"])
+            let seq = MessageMonitorParser.int64(from: value["seq"]).map { Int($0) }
+            let error = MessageMonitorParser.string(from: value["error"])
+            return MaxSendTextResult(ok: ok, cid: cid, seq: seq, error: error)
+        } catch {
+            return MaxSendTextResult(ok: false, cid: nil, seq: nil, error: error.localizedDescription)
+        }
+    }
+
     func nativePingMonitor() async -> NativePingStats? {
         let script = """
         (function() {
@@ -255,6 +287,14 @@ final class MaxWebSession: NSObject {
 
     private func isMaxPage(_ href: String) -> Bool {
         href.contains("max.ru")
+    }
+
+    private static func jsonEncodedLiteral(_ value: String) -> String {
+        guard let data = try? JSONEncoder().encode(value),
+              let encoded = String(data: data, encoding: .utf8) else {
+            return "\"\""
+        }
+        return encoded
     }
 
     private func makeMonitoringWebView() -> WKWebView {
