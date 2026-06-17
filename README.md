@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="Max2iMessage" width="128" height="128">
+</p>
+
 # Max2iMessage
 
 > macOS menu bar app that forwards [MAX](https://web.max.ru) messenger notifications to iMessage and Email.
