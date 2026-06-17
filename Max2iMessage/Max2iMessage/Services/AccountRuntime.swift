@@ -30,7 +30,10 @@ final class AccountRuntime: MaxWebSessionDelegate {
     private var pendingForwardMessageIds: Set<String> = []
     private var pendingForwardTasks: [String: Task<Void, Never>] = [:]
 
-    private static let smartForwardDelayNs: UInt64 = 1_500_000_000
+    private var forwardDelayNanoseconds: UInt64 {
+        let seconds = max(0, account.forwardDelaySeconds)
+        return UInt64(seconds * 1_000_000_000)
+    }
 
     var status: AccountStatus = .offline
     var onStatusChange: ((AccountStatus) -> Void)?
@@ -343,6 +346,12 @@ final class AccountRuntime: MaxWebSessionDelegate {
                 payload: payload,
                 payloadMyUserId: payloadMyUserId
             )
+        } else if forwardDelayNanoseconds > 0 {
+            scheduleDelayedForward(
+                message: message,
+                displayText: displayText,
+                payloadMyUserId: payloadMyUserId
+            )
         } else {
             guard claimAndForward(message: message, displayText: displayText, payloadMyUserId: payloadMyUserId) else {
                 return
@@ -366,8 +375,11 @@ final class AccountRuntime: MaxWebSessionDelegate {
 
         pendingForwardMessageIds.insert(message.id)
         let messageId = message.id
+        let delayNs = forwardDelayNanoseconds
         let task = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: Self.smartForwardDelayNs)
+            if delayNs > 0 {
+                try? await Task.sleep(nanoseconds: delayNs)
+            }
             guard !Task.isCancelled, let self else { return }
             self.pendingForwardMessageIds.remove(messageId)
             self.pendingForwardTasks.removeValue(forKey: messageId)
@@ -386,6 +398,36 @@ final class AccountRuntime: MaxWebSessionDelegate {
                 )
                 return
             }
+
+            _ = self.claimAndForward(
+                message: message,
+                displayText: displayText,
+                payloadMyUserId: payloadMyUserId
+            )
+        }
+        pendingForwardTasks[messageId] = task
+    }
+
+    private func scheduleDelayedForward(
+        message: MaxMessage,
+        displayText: String,
+        payloadMyUserId: String?
+    ) {
+        guard !pendingForwardMessageIds.contains(message.id) else {
+            tracePipeline("skip_pending", message)
+            return
+        }
+
+        pendingForwardMessageIds.insert(message.id)
+        let messageId = message.id
+        let delayNs = forwardDelayNanoseconds
+        let task = Task { [weak self] in
+            if delayNs > 0 {
+                try? await Task.sleep(nanoseconds: delayNs)
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.pendingForwardMessageIds.remove(messageId)
+            self.pendingForwardTasks.removeValue(forKey: messageId)
 
             _ = self.claimAndForward(
                 message: message,
@@ -462,8 +504,8 @@ final class AccountRuntime: MaxWebSessionDelegate {
             accountId: accountId,
             message: message
         )
-        let recipient = account.effectiveRecipient
-        guard !recipient.isEmpty else {
+
+        guard account.hasConfiguredDestination else {
             var updated = statsUpdater()
             updated.recordError()
             statsRecorder(updated)
@@ -482,24 +524,63 @@ final class AccountRuntime: MaxWebSessionDelegate {
             )
         }
 
-        do {
-            try forwarder.send(to: recipient, text: body)
-            var updated = statsUpdater()
-            updated.recordSent()
-            statsRecorder(updated)
-            onStatsChange?()
-            LogService.shared.log(
-                .messageSent,
-                accountId: accountId,
-                message: "to=\(recipient) id=\(message.id) key=\(globalKey) maxUserId=\(myUserId ?? "-")"
-            )
-        } catch {
-            var updated = statsUpdater()
-            updated.recordError()
-            statsRecorder(updated)
-            onStatsChange?()
-            LogService.shared.log(.sendFailed, accountId: accountId, message: error.localizedDescription, level: "ERROR")
+        var sentAny = false
+        var lastError: Error?
+
+        if account.forwardDestination == .iMessage || account.forwardDestination == .both {
+            let recipient = account.effectiveRecipient
+            if !recipient.isEmpty {
+                do {
+                    try forwarder.sendiMessage(to: recipient, text: body)
+                    sentAny = true
+                    LogService.shared.log(
+                        .messageSent,
+                        accountId: accountId,
+                        message: "channel=iMessage to=\(recipient) id=\(message.id) key=\(globalKey) maxUserId=\(myUserId ?? "-")"
+                    )
+                } catch {
+                    lastError = error
+                    LogService.shared.log(.sendFailed, accountId: accountId, message: "iMessage: \(error.localizedDescription)", level: "ERROR")
+                }
+            } else if account.forwardDestination == .iMessage {
+                lastError = MessageForwarderError.emptyRecipient("iMessage")
+                LogService.shared.log(.sendFailed, accountId: accountId, message: "iMessage recipient not configured", level: "ERROR")
+            }
         }
+
+        if account.forwardDestination == .email || account.forwardDestination == .both {
+            let recipient = account.effectiveEmailRecipient
+            if !recipient.isEmpty {
+                let subject = forwarder.formatEmailSubject(senderName: message.senderName)
+                do {
+                    try forwarder.sendEmail(to: recipient, subject: subject, text: body)
+                    sentAny = true
+                    LogService.shared.log(
+                        .messageSent,
+                        accountId: accountId,
+                        message: "channel=email to=\(recipient) id=\(message.id) key=\(globalKey) maxUserId=\(myUserId ?? "-")"
+                    )
+                } catch {
+                    lastError = error
+                    LogService.shared.log(.sendFailed, accountId: accountId, message: "Email: \(error.localizedDescription)", level: "ERROR")
+                }
+            } else if account.forwardDestination == .email {
+                lastError = MessageForwarderError.emptyRecipient("Email")
+                LogService.shared.log(.sendFailed, accountId: accountId, message: "Email recipient not configured", level: "ERROR")
+            }
+        }
+
+        var updated = statsUpdater()
+        if sentAny {
+            updated.recordSent()
+        } else {
+            updated.recordError()
+            if let lastError {
+                LogService.shared.log(.sendFailed, accountId: accountId, message: lastError.localizedDescription, level: "ERROR")
+            }
+        }
+        statsRecorder(updated)
+        onStatsChange?()
     }
 
     private func startSyncWatchdog() {

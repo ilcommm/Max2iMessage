@@ -261,14 +261,14 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Max2iMessage отправляет уведомления о новых сообщениях MAX через приложение Messages.";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Max2iMessage отправляет уведомления о новых сообщениях MAX через приложения Messages и Mail.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "Max2iMessage использует контакты для выбора получателя iMessage.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.3;
+				MARKETING_VERSION = 1.4;
 				PRODUCT_BUNDLE_IDENTIFIER = ilcomm.Max2iMessage;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -297,14 +297,14 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Max2iMessage отправляет уведомления о новых сообщениях MAX через приложение Messages.";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Max2iMessage отправляет уведомления о новых сообщениях MAX через приложения Messages и Mail.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "Max2iMessage использует контакты для выбора получателя iMessage.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.3;
+				MARKETING_VERSION = 1.4;
 				PRODUCT_BUNDLE_IDENTIFIER = ilcomm.Max2iMessage;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;

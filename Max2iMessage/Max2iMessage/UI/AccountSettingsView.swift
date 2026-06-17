@@ -42,8 +42,8 @@ struct AccountSettingsView: View {
                             .foregroundStyle(statusColor(status))
                         VStack(alignment: .leading, spacing: 2) {
                             Text(account.name)
-                            if !account.effectiveRecipient.isEmpty {
-                                Text(account.effectiveRecipient)
+                            if account.hasConfiguredDestination {
+                                Text(account.destinationSummary)
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
@@ -94,26 +94,50 @@ struct AccountSettingsView: View {
                     .onChange(of: draftAccount.enabled) { persistAccount() }
             }
 
-            Section("Получатель iMessage") {
-                Text("Укажите телефон или Apple ID того, кто будет получать уведомления на iPhone.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            Section("Пересылка") {
+                Picker("Канал", selection: $draftAccount.forwardDestination) {
+                    ForEach(ForwardDestination.allCases, id: \.self) { destination in
+                        Text(destination.label).tag(destination)
+                    }
+                }
+                .onChange(of: draftAccount.forwardDestination) { persistAccount() }
 
-                TextField("Телефон или Apple ID email", text: $draftAccount.iMessageRecipient)
-                    .textFieldStyle(.roundedBorder)
+                if draftAccount.forwardDestination == .iMessage || draftAccount.forwardDestination == .both {
+                    Text("Укажите телефон или Apple ID того, кто будет получать уведомления на iPhone.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    TextField("Телефон или Apple ID email", text: $draftAccount.iMessageRecipient)
+                        .textFieldStyle(.roundedBorder)
+                        .onChange(of: draftAccount.iMessageRecipient) { persistAccount() }
+                    ContactPickerButton(
+                        recipient: $draftAccount.iMessageRecipient,
+                        contactIdentifier: $draftAccount.contactIdentifier
+                    )
                     .onChange(of: draftAccount.iMessageRecipient) { persistAccount() }
-                ContactPickerButton(
-                    recipient: $draftAccount.iMessageRecipient,
-                    contactIdentifier: $draftAccount.contactIdentifier
-                )
-                .onChange(of: draftAccount.iMessageRecipient) { persistAccount() }
+                }
 
-                if draftAccount.effectiveRecipient.isEmpty {
+                if draftAccount.forwardDestination == .email || draftAccount.forwardDestination == .both {
+                    Text("Укажите email получателя — письмо отправится через приложение Mail.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    TextField("Email", text: $draftAccount.emailRecipient)
+                        .textFieldStyle(.roundedBorder)
+                        .onChange(of: draftAccount.emailRecipient) { persistAccount() }
+                    ContactPickerButton(
+                        recipient: $draftAccount.emailRecipient,
+                        contactIdentifier: $draftAccount.contactIdentifier
+                    )
+                    .onChange(of: draftAccount.emailRecipient) { persistAccount() }
+                }
+
+                if !draftAccount.hasConfiguredDestination {
                     Text("Укажите получателя — без этого пересылка не работает")
                         .font(.caption)
                         .foregroundStyle(.orange)
-                } else {
-                    Text("Активный получатель: \(draftAccount.effectiveRecipient)")
+                } else if !draftAccount.destinationSummary.isEmpty {
+                    Text("Активные получатели: \(draftAccount.destinationSummary)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -122,7 +146,25 @@ struct AccountSettingsView: View {
             Section("Фильтры") {
                 Toggle("Умная пересылка", isOn: $draftAccount.smartForwardEnabled)
                     .onChange(of: draftAccount.smartForwardEnabled) { persistAccount() }
-                Text("Ждёт 1.5 с и не пересылает сообщения, которые вы уже просмотрели в MAX (на любом устройстве).")
+                Text("Ждёт заданное время и не пересылает сообщения, которые вы уже просмотрели в MAX (на любом устройстве).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                HStack {
+                    Text("Задержка перед отправкой")
+                    Spacer()
+                    TextField("", value: $draftAccount.forwardDelaySeconds, format: .number.precision(.fractionLength(1)))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 60)
+                        .multilineTextAlignment(.trailing)
+                    Text("сек")
+                        .foregroundStyle(.secondary)
+                }
+                .onChange(of: draftAccount.forwardDelaySeconds) {
+                    draftAccount.forwardDelaySeconds = min(max(draftAccount.forwardDelaySeconds, 0), 60)
+                    persistAccount()
+                }
+                Text("Применяется перед отправкой. При умной пересылке — до проверки прочтения. 0 — без задержки.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Toggle("Не пересылать свои сообщения", isOn: $draftAccount.skipOwnMessages)
@@ -138,13 +180,13 @@ struct AccountSettingsView: View {
                     .onChange(of: draftAccount.forwardAttachmentsPlaceholder) { persistAccount() }
             }
 
-            Section("Пересылка в iMessage") {
-                Picker("Формат сообщения", selection: $draftAccount.forwardNotificationOnly) {
+            Section("Формат сообщения") {
+                Picker("Содержимое", selection: $draftAccount.forwardNotificationOnly) {
                     Text("Полный текст (Имя: сообщение)").tag(false)
                     Text("Только уведомление (Имя написал(а) в MAX)").tag(true)
                 }
                 .onChange(of: draftAccount.forwardNotificationOnly) { persistAccount() }
-                Text("«Только уведомление» не передаёт текст сообщения — удобно, если Mac используют несколько человек и вы не хотите, чтобы переписка сохранялась в Messages на этом компьютере.")
+                Text("«Только уведомление» не передаёт текст сообщения — удобно, если Mac используют несколько человек и вы не хотите, чтобы переписка сохранялась на этом компьютере.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -226,7 +268,7 @@ struct AccountSettingsView: View {
                     openWindow(id: "auth")
                 }
             }
-            Button("Отправить тестовое iMessage") {
+            Button("Отправить тестовое сообщение") {
                 sendTestMessage()
             }
             Button("Открыть логи") {
@@ -260,8 +302,7 @@ struct AccountSettingsView: View {
 
     private func sendTestMessage() {
         persistAccount()
-        let recipient = draftAccount.effectiveRecipient
-        guard !recipient.isEmpty else {
+        guard draftAccount.hasConfiguredDestination else {
             saveStatus = "Укажите получателя"
             return
         }
@@ -275,12 +316,45 @@ struct AccountSettingsView: View {
                 text: "Проверка Max2iMessage (\(draftAccount.name))"
             )
         }
-        do {
-            try forwarder.send(to: recipient, text: text)
-            saveStatus = "Тест отправлен"
-        } catch {
-            saveStatus = "Ошибка: \(error.localizedDescription)"
-            LogService.shared.log(.sendFailed, accountId: draftAccount.id, message: error.localizedDescription, level: "ERROR")
+
+        var sentAny = false
+        var lastError: String?
+
+        if draftAccount.forwardDestination == .iMessage || draftAccount.forwardDestination == .both {
+            let recipient = draftAccount.effectiveRecipient
+            if !recipient.isEmpty {
+                do {
+                    try forwarder.sendiMessage(to: recipient, text: text)
+                    sentAny = true
+                } catch {
+                    lastError = "iMessage: \(error.localizedDescription)"
+                    LogService.shared.log(.sendFailed, accountId: draftAccount.id, message: lastError!, level: "ERROR")
+                }
+            }
+        }
+
+        if draftAccount.forwardDestination == .email || draftAccount.forwardDestination == .both {
+            let recipient = draftAccount.effectiveEmailRecipient
+            if !recipient.isEmpty {
+                do {
+                    try forwarder.sendEmail(
+                        to: recipient,
+                        subject: forwarder.formatEmailSubject(senderName: "Тест"),
+                        text: text
+                    )
+                    sentAny = true
+                } catch {
+                    let emailError = "Email: \(error.localizedDescription)"
+                    lastError = lastError.map { "\($0); \(emailError)" } ?? emailError
+                    LogService.shared.log(.sendFailed, accountId: draftAccount.id, message: emailError, level: "ERROR")
+                }
+            }
+        }
+
+        if sentAny {
+            saveStatus = lastError == nil ? "Тест отправлен" : "Частично отправлено: \(lastError!)"
+        } else {
+            saveStatus = "Ошибка: \(lastError ?? "получатель не настроен")"
         }
     }
 
