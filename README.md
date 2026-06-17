@@ -6,6 +6,16 @@
 
 > macOS menu bar app that forwards [MAX](https://web.max.ru) messenger notifications to iMessage and Email.
 
+## ⚠️ Разработка и поддержка временно приостановлены
+
+Поддержка и разработка Max2iMessage **временно приостановлены**. В мессенджере MAX появилась возможность получать уведомления на iPhone без Mac: достаточно добавить [web.max.ru](https://web.max.ru) на экран «Домой» через Safari и включить push-уведомления в веб-версии.
+
+**Инструкция:** [Как вернуть уведомления в мессенджере MAX на iPhone](https://www.iphones.ru/iNotes/kak-vernut-uvedomleniya-v-messendzhere-max-na-iphone) (iPhones.ru)
+
+Репозиторий и последний релиз (v1.7) остаются доступными «как есть». Если официальная веб-версия MAX перестанет удовлетворять вашим задачам — напишите на [ilcommm@gmail.com](mailto:ilcommm@gmail.com).
+
+---
+
 Нативное macOS-приложение (Menu Bar), которое отслеживает новые сообщения в веб-версии [MAX](https://web.max.ru) и пересылает уведомления через iMessage и/или Email.
 
 Все вычисления выполняются локально на вашем Mac. Пароли MAX не сохраняются.
