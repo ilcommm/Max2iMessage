@@ -488,24 +488,65 @@
 
     function extractContactName(entity) {
         if (!entity || typeof entity !== 'object') return '';
-        if (entity.name) return String(entity.name).trim();
+
+        const firstName = entity.firstName ? String(entity.firstName).trim() : '';
+        const lastName = entity.lastName ? String(entity.lastName).trim() : '';
+        const composed = [firstName, lastName].filter(Boolean).join(' ').trim();
+        if (composed) return composed;
+
         if (Array.isArray(entity.names) && entity.names.length > 0) {
             const item = entity.names[0];
-            if (item.name) return String(item.name).trim();
-            const full = [item.firstName, item.lastName].filter(Boolean).join(' ').trim();
-            if (full) return full;
+            const fromNames = [item.firstName, item.lastName].filter(Boolean).join(' ').trim()
+                || (item.name ? String(item.name).trim() : '');
+            if (fromNames) return fromNames;
         }
-        const composed = [entity.firstName, entity.lastName].filter(Boolean).join(' ').trim();
-        if (composed) return composed;
+
+        if (entity.name) {
+            const name = String(entity.name).trim();
+            if (name && lastName && name.toLowerCase().indexOf(lastName.toLowerCase()) === -1) {
+                return (name + ' ' + lastName).trim();
+            }
+            return name;
+        }
         if (entity.title) return String(entity.title).trim();
         return '';
+    }
+
+    function mergeDisplayNames() {
+        const parts = [];
+        for (let i = 0; i < arguments.length; i++) {
+            const value = arguments[i] ? String(arguments[i]).trim() : '';
+            if (!value) continue;
+            const lower = value.toLowerCase();
+            if (!parts.some(function (existing) {
+                return existing.toLowerCase() === lower
+                    || existing.toLowerCase().indexOf(lower) !== -1
+                    || lower.indexOf(existing.toLowerCase()) !== -1;
+            })) {
+                parts.push(value);
+            }
+        }
+        return parts.join(' ').trim();
+    }
+
+    function rememberUserName(userId, name) {
+        const id = safeString(userId);
+        const trimmed = name ? String(name).trim() : '';
+        if (!id || !trimmed) return;
+        const existing = userNames[id];
+        if (!existing) {
+            userNames[id] = trimmed;
+            return;
+        }
+        const merged = mergeDisplayNames(existing, trimmed);
+        userNames[id] = merged.length >= existing.length ? merged : existing;
     }
 
     function ingestContact(contact) {
         if (!contact || typeof contact !== 'object') return;
         const id = safeString(contact.id || contact.userId || contact.contactId || contact.sender);
         const name = extractContactName(contact);
-        if (id && name) userNames[id] = name;
+        if (id && name) rememberUserName(id, name);
     }
 
     function ingestContactsList(contacts) {
@@ -547,19 +588,32 @@
     }
 
     function resolveSenderName(parsed, payload) {
+        ingestContact(payload.contact);
+        ingestContact(payload.sender);
+        ingestContact(payload.user);
+        if (parsed.msg) {
+            ingestContact(parsed.msg.sender);
+            ingestContact(parsed.msg.user);
+            ingestContact(parsed.msg.author);
+        }
+
         const fromCache = userNames[parsed.senderId];
         if (fromCache) return fromCache;
 
         const fromMessage = extractContactName(parsed.msg)
             || (parsed.msg.senderName ? String(parsed.msg.senderName).trim() : '');
-        if (fromMessage) return fromMessage;
-
         const fromPayload = extractContactName(payload.contact)
             || extractContactName(payload.sender)
             || extractContactName(payload.user);
-        if (fromPayload) return fromPayload;
+        const fromNested = parsed.msg ? (
+            extractContactName(parsed.msg.sender)
+            || extractContactName(parsed.msg.user)
+            || extractContactName(parsed.msg.author)
+        ) : '';
 
-        return chatTitles[parsed.chatId] || '';
+        const resolved = mergeDisplayNames(fromMessage, fromPayload, fromNested, chatTitles[parsed.chatId] || '');
+        if (parsed.senderId && resolved) rememberUserName(parsed.senderId, resolved);
+        return resolved;
     }
 
     function parsePacket(raw) {
@@ -904,7 +958,7 @@
         if (opcode === OPCODE_AUTH_SNAPSHOT && packet.cmd === 1) {
             const profile = payload.profile || {};
             myUserId = safeString(profile.id) || readMyUserIdFromStorage();
-            if (profile.name) userNames[myUserId] = profile.name;
+            if (profile.name) rememberUserName(myUserId, profile.name);
             ingestChatsMeta(payload.chats);
             ingestContactsList(payload.contacts);
             ingestContact(payload.contact);
@@ -1025,7 +1079,7 @@
             }
 
             const senderName = resolveSenderName(parsed, payload);
-            if (parsed.senderId && senderName) userNames[parsed.senderId] = senderName;
+            if (parsed.senderId && senderName) rememberUserName(parsed.senderId, senderName);
             myUserId = currentMyUserId();
             const ownMessage = isOwnOutgoingMessage(parsed, senderName);
 

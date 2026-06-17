@@ -96,6 +96,11 @@ final class AccountManager {
                 && IMessagesDatabaseMonitor.handlesMatch(account.effectiveRecipient, recipient)
         }
 
+        if let indexedAccountId = accountIdForIndexedBubble(in: message, among: candidates) {
+            runtimes[indexedAccountId]?.handleInboundIMessage(message)
+            return
+        }
+
         let activeCandidates = candidates.filter { account in
             guard let target = lastReplyStore.target(for: account.id) else { return false }
             return !target.isExpired(windowMinutes: account.replyWindowMinutes)
@@ -109,6 +114,19 @@ final class AccountManager {
 
         guard let accountId = selected?.id else { return }
         runtimes[accountId]?.handleInboundIMessage(message)
+    }
+
+    private func accountIdForIndexedBubble(in message: InboundIMessage, among candidates: [Account]) -> UUID? {
+        let candidateIds = Set(candidates.map(\.id))
+        let guids = [message.associatedMessageGuid, message.threadOriginatorGuid].compactMap { $0 }
+        for guid in guids {
+            guard let indexed = lastReplyStore.target(forBubbleGuid: guid),
+                  candidateIds.contains(indexed.accountId) else {
+                continue
+            }
+            return indexed.accountId
+        }
+        return nil
     }
 
     func refreshIMessageDatabaseAccess() {

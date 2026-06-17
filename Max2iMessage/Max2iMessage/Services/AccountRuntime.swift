@@ -31,6 +31,7 @@ final class AccountRuntime: MaxWebSessionDelegate {
     private var pendingForwardTasks: [String: Task<Void, Never>] = [:]
     private let lastReplyStore: LastReplyStore
     private var pendingBridgeReplyTexts: Set<String> = []
+    private var lastReplyForwardedAt: Date?
     private var recentBridgeSentTexts: [String: Date] = [:]
     private var inboundReplyTask: Task<Void, Never>?
 
@@ -241,37 +242,49 @@ final class AccountRuntime: MaxWebSessionDelegate {
         guard account.supportsIMessageReply else { return }
         guard account.enabled, isMonitoringActive else { return }
 
-        let text = inbound.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawText = inbound.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawText.isEmpty else { return }
+        guard !IMessagesDatabaseMonitor.isMarked(rawText) else { return }
+
+        let text = IMessagesDatabaseMonitor.stripMarker(rawText)
         guard !text.isEmpty else { return }
-        guard !IMessagesDatabaseMonitor.looksLikeForwardedNotification(text) else { return }
+        guard IMessagesDatabaseMonitor.isUserReplyType(inbound.associatedMessageType) else { return }
+        guard IMessagesDatabaseMonitor.isPlausibleUserReplyText(text) else { return }
         guard !lastReplyStore.wasRecentlySentToIMessage(accountId: accountId, text: text) else { return }
         guard !pendingBridgeReplyTexts.contains(text) else { return }
 
         LogService.shared.log(
             .replyDetected,
             accountId: accountId,
-            message: "iMessage reply row=\(inbound.rowId) textLength=\(text.count)"
+            message: "iMessage reply row=\(inbound.rowId) textLength=\(text.count) fromMe=\(inbound.isFromMe) inline=\(inbound.isInlineReply) type=\(inbound.associatedMessageType) guid=\(inbound.associatedMessageGuid ?? "-") thread=\(inbound.threadOriginatorGuid ?? "-")"
         )
 
         inboundReplyTask?.cancel()
         inboundReplyTask = Task { [weak self] in
-            await self?.processInboundReply(text)
+            await self?.processInboundReply(inbound, replyText: text)
         }
     }
 
-    private func processInboundReply(_ text: String) async {
+    private func processInboundReply(_ inbound: InboundIMessage, replyText: String) async {
         guard !Task.isCancelled else { return }
 
-        guard let target = lastReplyStore.target(for: accountId) else {
-            updateReplyStatus("Нет активного адресата")
+        let text = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let lastReplyForwardedAt, Date().timeIntervalSince(lastReplyForwardedAt) < 2 {
+            return
+        }
+        lastReplyStore.pruneExpiredBubbles(windowMinutes: account.replyWindowMinutes)
+
+        guard let resolved = resolveReplyTarget(for: inbound) else {
+            if inbound.isInlineReply {
+                updateReplyStatus("Не найден адресат для этого сообщения")
+            } else {
+                updateReplyStatus("Нет активного адресата")
+            }
             return
         }
 
-        if target.isExpired(windowMinutes: account.replyWindowMinutes) {
-            lastReplyStore.clearTarget(accountId: accountId)
-            updateReplyStatus("Окно ответа истекло")
-            return
-        }
+        let target = resolved.target
+        let routingMode = resolved.mode
 
         guard isSessionSynced else {
             updateReplyStatus("MAX не синхронизирован")
@@ -287,6 +300,7 @@ final class AccountRuntime: MaxWebSessionDelegate {
         guard !Task.isCancelled else { return }
 
         if result.ok {
+            lastReplyForwardedAt = Date()
             var updated = statsUpdater()
             updated.recordReply()
             statsRecorder(updated)
@@ -295,8 +309,11 @@ final class AccountRuntime: MaxWebSessionDelegate {
             LogService.shared.log(
                 .replySent,
                 accountId: accountId,
-                message: "chat=\(target.chatId) to=\(target.senderName) cid=\(result.cid ?? 0)"
+                message: "chat=\(target.chatId) to=\(target.senderName) inline=\(inbound.isInlineReply) route=\(routingMode) cid=\(result.cid ?? 0)"
             )
+            if account.iMessageReplyConfirmationEnabled {
+                sendReplyConfirmation(to: target.senderName)
+            }
         } else {
             recentBridgeSentTexts.removeValue(forKey: text)
             recordReplyError()
@@ -640,6 +657,9 @@ final class AccountRuntime: MaxWebSessionDelegate {
         if account.forwardDestination == .iMessage || account.forwardDestination == .both {
             let recipient = account.effectiveRecipient
             if !recipient.isEmpty {
+                let outboundRowIdBeforeSend = account.supportsIMessageReply
+                    ? IMessagesDatabaseMonitor.shared.maxOutboundRowId(recipient: recipient)
+                    : 0
                 do {
                     try forwarder.sendiMessage(to: recipient, text: body)
                     sentAny = true
@@ -649,6 +669,14 @@ final class AccountRuntime: MaxWebSessionDelegate {
                         accountId: accountId,
                         message: "channel=iMessage to=\(recipient) id=\(message.id) key=\(globalKey) maxUserId=\(myUserId ?? "-")"
                     )
+                    if account.supportsIMessageReply {
+                        registerForwardedBubble(
+                            recipient: recipient,
+                            body: body,
+                            message: message,
+                            afterRowId: outboundRowIdBeforeSend
+                        )
+                    }
                 } catch {
                     lastError = error
                     LogService.shared.log(.sendFailed, accountId: accountId, message: "iMessage: \(error.localizedDescription)", level: "ERROR")
@@ -684,19 +712,6 @@ final class AccountRuntime: MaxWebSessionDelegate {
         var updated = statsUpdater()
         if sentAny {
             updated.recordSent()
-            if sentViaIMessage && account.supportsIMessageReply {
-                lastReplyStore.setTarget(
-                    accountId: accountId,
-                    target: LastReplyTarget(
-                        chatId: message.chatId,
-                        senderName: message.senderName,
-                        messageId: message.id,
-                        forwardedAt: .now
-                    )
-                )
-                lastReplyStore.noteOutboundText(accountId: accountId, text: body)
-                updateReplyStatus("Ожидает ответ: \(message.senderName)")
-            }
         } else {
             updated.recordError()
             if let lastError {
@@ -1075,5 +1090,127 @@ final class AccountRuntime: MaxWebSessionDelegate {
     private func pruneBridgeSentTexts() {
         let cutoff = Date().addingTimeInterval(-120)
         recentBridgeSentTexts = recentBridgeSentTexts.filter { $0.value >= cutoff }
+    }
+
+    private func sendReplyConfirmation(to senderName: String) {
+        let recipient = account.effectiveRecipient
+        guard !recipient.isEmpty else { return }
+        let confirmation = forwarder.formatReplyConfirmation(senderName: senderName)
+        lastReplyStore.noteOutboundText(accountId: accountId, text: BridgeMessageMarker.mark(confirmation))
+        do {
+            try forwarder.sendiMessage(to: recipient, text: confirmation)
+            LogService.shared.log(
+                .pipelineTrace,
+                accountId: accountId,
+                message: "reply_confirmation to=\(recipient) name=\(senderName)"
+            )
+        } catch {
+            LogService.shared.log(
+                .replyFailed,
+                accountId: accountId,
+                message: "reply_confirmation: \(error.localizedDescription)",
+                level: "ERROR"
+            )
+        }
+    }
+
+    private struct ResolvedReplyTarget {
+        let target: LastReplyTarget
+        let mode: String
+    }
+
+    private func resolveReplyTarget(for inbound: InboundIMessage) -> ResolvedReplyTarget? {
+        let guids = [inbound.associatedMessageGuid, inbound.threadOriginatorGuid].compactMap { $0 }
+        for guid in guids {
+            if let indexed = lastReplyStore.target(forBubbleGuid: guid),
+               indexed.accountId == accountId {
+                return ResolvedReplyTarget(target: indexed.target, mode: "guid")
+            }
+        }
+
+        let recipient = account.effectiveRecipient
+        if !recipient.isEmpty {
+            for guid in guids {
+                guard let parentText = IMessagesDatabaseMonitor.shared.findMessageText(
+                    byGuid: guid,
+                    recipient: recipient
+                ) else { continue }
+                let trimmedParent = parentText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let indexed = lastReplyStore.target(forBubbleBody: trimmedParent),
+                   indexed.accountId == accountId {
+                    return ResolvedReplyTarget(target: indexed.target, mode: "parent_text")
+                }
+            }
+        }
+
+        guard let fallback = lastReplyStore.target(for: accountId) else { return nil }
+        if fallback.isExpired(windowMinutes: account.replyWindowMinutes) {
+            lastReplyStore.clearTarget(accountId: accountId)
+            updateReplyStatus("Окно ответа истекло")
+            return nil
+        }
+        return ResolvedReplyTarget(target: fallback, mode: "fallback")
+    }
+
+    private func registerForwardedBubble(
+        recipient: String,
+        body: String,
+        message: MaxMessage,
+        afterRowId: Int64
+    ) {
+        let target = LastReplyTarget(
+            chatId: message.chatId,
+            senderName: message.senderName,
+            messageId: message.id,
+            forwardedAt: .now
+        )
+        let isPersonalDialog = Int64(message.chatId).map { $0 > 0 } ?? false
+        let existing = lastReplyStore.target(for: accountId)
+        let shouldSetFallback = isPersonalDialog
+            || existing == nil
+            || existing!.isExpired(windowMinutes: account.replyWindowMinutes)
+
+        if shouldSetFallback {
+            lastReplyStore.setTarget(accountId: accountId, target: target)
+            updateReplyStatus("Ожидает ответ: \(message.senderName)")
+        } else {
+            LogService.shared.log(
+                .pipelineTrace,
+                accountId: accountId,
+                message: "reply_target_kept existing=\(existing?.senderName ?? "-") chat=\(existing?.chatId ?? "-") skipped=\(message.senderName) chat=\(message.chatId)"
+            )
+        }
+        lastReplyStore.registerBubbleBody(accountId: accountId, body: BridgeMessageMarker.mark(body), target: target)
+        lastReplyStore.noteOutboundText(accountId: accountId, text: BridgeMessageMarker.mark(body))
+
+        IMessagesDatabaseMonitor.shared.captureOutboundMessageGuid(
+            recipient: recipient,
+            body: body,
+            afterRowId: afterRowId,
+            accountId: accountId
+        ) { [weak self] guid, rowId in
+            guard let self else { return }
+            Task { @MainActor in
+                if let rowId {
+                    IMessagesDatabaseMonitor.shared.registerBridgeRow(accountId: self.accountId, rowId: rowId)
+                }
+                guard let guid else { return }
+                self.lastReplyStore.registerBubble(
+                    accountId: self.accountId,
+                    iMessageGuid: guid,
+                    target: target
+                )
+                self.lastReplyStore.registerBubbleBody(
+                    accountId: self.accountId,
+                    body: BridgeMessageMarker.mark(body),
+                    target: target
+                )
+                LogService.shared.log(
+                    .pipelineTrace,
+                    accountId: self.accountId,
+                    message: "indexed iMessage bubble guid=\(guid) chat=\(target.chatId) from=\(target.senderName)"
+                )
+            }
+        }
     }
 }

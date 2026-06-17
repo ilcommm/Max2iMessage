@@ -154,7 +154,7 @@ struct AccountSettingsView: View {
                             appState.accountManager.refreshIMessageDatabaseAccess()
                         }
 
-                    Text("Ответьте на уведомление с iPhone или Apple Watch — текст уйдёт последнему пересланному отправителю в MAX.")
+                    Text("Ответ на конкретное сообщение в iMessage уходит тому отправителю в MAX. Обычный ответ в чат — последнему пересланному в пределах окна.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -173,6 +173,13 @@ struct AccountSettingsView: View {
                             draftAccount.replyWindowMinutes = min(max(draftAccount.replyWindowMinutes, 1), 60)
                             persistAccount()
                         }
+
+                        Toggle("Подтверждение в iMessage", isOn: $draftAccount.iMessageReplyConfirmationEnabled)
+                            .onChange(of: draftAccount.iMessageReplyConfirmationEnabled) { persistAccount() }
+
+                        Text("После отправки ответа в MAX придёт «Отправил сообщение Имя Фамилия в MAX».")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
 
                         if appState.accountManager.iMessageDatabaseAccess {
                             Text("Доступ к Messages: есть")

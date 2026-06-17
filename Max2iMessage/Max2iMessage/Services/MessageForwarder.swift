@@ -26,6 +26,12 @@ struct MessageForwarder: Sendable {
         return "\(name) написал(а) в MAX"
     }
 
+    func formatReplyConfirmation(senderName: String) -> String {
+        let name = senderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return "Отправил сообщение в MAX" }
+        return "Отправил сообщение \(name) в MAX"
+    }
+
     func formatEmailSubject(senderName: String) -> String {
         let name = senderName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return "Новое сообщение в MAX" }
@@ -36,8 +42,9 @@ struct MessageForwarder: Sendable {
         let trimmed = recipient.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw MessageForwarderError.emptyRecipient("iMessage") }
 
+        let markedText = BridgeMessageMarker.mark(text)
         let escapedRecipient = escapeAppleScript(trimmed)
-        let escapedText = escapeAppleScript(text)
+        let escapedText = escapeAppleScript(markedText)
 
         let script = """
         tell application "Messages"

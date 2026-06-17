@@ -33,6 +33,7 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
     var forwardDelaySeconds: Double
     var forwardNotificationOnly: Bool
     var iMessageReplyEnabled: Bool
+    var iMessageReplyConfirmationEnabled: Bool
     var replyWindowMinutes: Double
 
     init(
@@ -54,6 +55,7 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
         forwardDelaySeconds: Double = 1.5,
         forwardNotificationOnly: Bool = false,
         iMessageReplyEnabled: Bool = false,
+        iMessageReplyConfirmationEnabled: Bool = false,
         replyWindowMinutes: Double = 10
     ) {
         self.id = id
@@ -74,6 +76,7 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
         self.forwardDelaySeconds = forwardDelaySeconds
         self.forwardNotificationOnly = forwardNotificationOnly
         self.iMessageReplyEnabled = iMessageReplyEnabled
+        self.iMessageReplyConfirmationEnabled = iMessageReplyConfirmationEnabled
         self.replyWindowMinutes = replyWindowMinutes
     }
 
@@ -111,6 +114,7 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
         forwardDelaySeconds = try container.decodeIfPresent(Double.self, forKey: .forwardDelaySeconds) ?? 1.5
         forwardNotificationOnly = try container.decodeIfPresent(Bool.self, forKey: .forwardNotificationOnly) ?? false
         iMessageReplyEnabled = try container.decodeIfPresent(Bool.self, forKey: .iMessageReplyEnabled) ?? false
+        iMessageReplyConfirmationEnabled = try container.decodeIfPresent(Bool.self, forKey: .iMessageReplyConfirmationEnabled) ?? false
         replyWindowMinutes = try container.decodeIfPresent(Double.self, forKey: .replyWindowMinutes) ?? 10
     }
 
@@ -154,7 +158,7 @@ struct Account: Identifiable, Codable, Equatable, Sendable {
         case id, name, forwardDestination, iMessageRecipient, emailRecipient, contactIdentifier, enabled
         case skipGroupChats, skipOwnMessages, skipMutedChats, forwardAttachmentsPlaceholder
         case verboseChatLogging, traceRealtimeLogging, muteProbeLogging, smartForwardEnabled
-        case forwardDelaySeconds, forwardNotificationOnly, iMessageReplyEnabled, replyWindowMinutes
+        case forwardDelaySeconds, forwardNotificationOnly, iMessageReplyEnabled, iMessageReplyConfirmationEnabled, replyWindowMinutes
     }
 
     var effectiveVerboseChatLogging: Bool {
